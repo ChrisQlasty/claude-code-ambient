@@ -1,0 +1,21 @@
+# Example ~/.config/ambient/config.yaml
+# Validate with: ambient config validate --config examples/config.yaml
+version: 1
+
+devices:
+  desk:
+    driver: console          # prints effects to the terminal; no hardware needed
+    baseline:
+      color: "#ffffff"
+      brightness: 60
+
+events:
+  UserPromptSubmit:
+    - device: desk
+      effect: { type: flash, color: "#3050ff", duration: 0.6, times: 1 }
+  Notification:
+    - device: desk
+      effect: { type: pulse, color: "#ffa000", duration: 3 }
+  Stop:
+    - device: [desk]
+      effect: { type: flash, color: "#00ff60", duration: 2, times: 3 }
