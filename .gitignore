@@ -1,0 +1,25 @@
+# Private planning docs (see CLAUDE.md)
+PRs/
+CLAUDE.local.md
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Frontend (Phase 5)
+node_modules/
+src/ambient/web_dist/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
