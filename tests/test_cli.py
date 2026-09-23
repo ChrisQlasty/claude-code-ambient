@@ -85,7 +85,7 @@ def test_config_validate_missing_file() -> None:
 
 
 def test_config_validate_unknown_driver(isolated_config: Path) -> None:
-    isolated_config.write_text("devices: {lines: {driver: nanoleaf}}\n")
+    isolated_config.write_text("devices: {lines: {driver: lifx}}\n")
     result = runner.invoke(app, ["config", "validate"])
     assert result.exit_code == 1
-    assert "unknown driver 'nanoleaf'" in result.output
+    assert "unknown driver 'lifx'" in result.output

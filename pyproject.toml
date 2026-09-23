@@ -21,6 +21,7 @@ ambient = "ambient.cli:app"
 
 [project.entry-points."ambient.drivers"]
 console = "ambient.drivers.console:ConsoleDriver"
+nanoleaf = "ambient.drivers.nanoleaf:NanoleafDriver"
 
 [dependency-groups]
 dev = [
