@@ -22,6 +22,10 @@ def config_file() -> Path:
     return Path(override).expanduser() if override else config_dir() / "config.yaml"
 
 
+def config_file_overridden() -> bool:
+    return bool(os.environ.get("AMBIENT_CONFIG"))
+
+
 def cache_dir() -> Path:
     return _xdg("XDG_CACHE_HOME", "~/.cache")
 

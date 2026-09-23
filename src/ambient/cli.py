@@ -27,8 +27,11 @@ def _fail(message: str) -> typer.Exit:
 
 
 def _load(path: Path | None, *, required: bool) -> Config:
+    # A missing default config is fine for `test`, but a path the user named (via --config or
+    # $AMBIENT_CONFIG) that doesn't exist is almost certainly a typo, so it's an error.
+    explicit = path is not None or paths.config_file_overridden()
     path = path or paths.config_file()
-    if not required and not path.exists():
+    if not required and not explicit and not path.exists():
         return Config()
     try:
         return load_config(path)

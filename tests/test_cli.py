@@ -11,8 +11,11 @@ EXAMPLE = Path(__file__).parent.parent / "examples" / "config.yaml"
 
 @pytest.fixture(autouse=True)
 def isolated_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    path = tmp_path / "config.yaml"
-    monkeypatch.setenv("AMBIENT_CONFIG", str(path))
+    # Isolate via the XDG root rather than $AMBIENT_CONFIG, which counts as an explicit path.
+    monkeypatch.delenv("AMBIENT_CONFIG", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    path = tmp_path / "ambient" / "config.yaml"
+    path.parent.mkdir()
     return path
 
 
@@ -46,6 +49,22 @@ def test_test_errors(args: list[str], message: str) -> None:
     result = runner.invoke(app, args)
     assert result.exit_code == 1
     assert message in result.output
+
+
+def test_test_explicit_missing_config_is_an_error(tmp_path: Path) -> None:
+    missing = tmp_path / "confg.yaml"
+    result = runner.invoke(app, ["test", "console", "solid", "#f00", "-c", str(missing)])
+    assert result.exit_code == 1
+    assert "not found" in result.output
+
+
+def test_test_missing_env_config_is_an_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AMBIENT_CONFIG", str(tmp_path / "missing.yaml"))
+    result = runner.invoke(app, ["test", "console", "solid", "#f00"])
+    assert result.exit_code == 1
+    assert "not found" in result.output
 
 
 def test_config_path(isolated_config: Path) -> None:
