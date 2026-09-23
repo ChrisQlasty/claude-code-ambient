@@ -1,4 +1,5 @@
 import pytest
+from pydantic import ValidationError
 
 from ambient.effects import RGB, Flash, Pulse, Solid, render
 
@@ -51,3 +52,11 @@ def test_pulse_has_at_least_two_frames() -> None:
 
 def test_brightness_defaults_to_full() -> None:
     assert render(Solid(color=RED)).frames[0].brightness == 100
+
+
+@pytest.mark.parametrize(
+    "color", [[300, -5, 0], [255, 0, 0], (255, 0, 0), RGB(256, 0, 0), 0xFF0000]
+)
+def test_color_rejects_non_hex_and_out_of_range(color: object) -> None:
+    with pytest.raises(ValidationError, match="invalid color"):
+        Solid.model_validate({"color": color})

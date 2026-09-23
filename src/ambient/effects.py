@@ -37,8 +37,14 @@ class RGB(NamedTuple):
         return f"#{self.r:02x}{self.g:02x}{self.b:02x}"
 
 
-def _parse_color(value: object) -> object:
-    return RGB.from_hex(value) if isinstance(value, str) else value
+def _parse_color(value: object) -> RGB:
+    if isinstance(value, str):
+        return RGB.from_hex(value)
+    # Code may pass RGB directly, but a bare list/tuple from YAML would bypass the hex check,
+    # and NamedTuple construction doesn't bound the channels, so both are checked here.
+    if isinstance(value, RGB) and all(isinstance(c, int) and 0 <= c <= 255 for c in value):
+        return value
+    raise ValueError(f"invalid color {value!r}, expected '#rgb' or '#rrggbb'")
 
 
 Color = Annotated[
