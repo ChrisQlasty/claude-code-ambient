@@ -1,16 +1,8 @@
-# CLAUDE.md
-
-Guidance for Claude Code when working in this repository.
-
 ## Project
 
 `claude-code-ambient` turns Claude Code hook events (`UserPromptSubmit`, `Notification`, `Stop`, ...) into
-ambient light effects on physical devices (Nanoleaf Lines, NuPhy Air75 V3, Logitech G102, Philips Hue), and always
+ambient light effects on physical devices (eg. Nanoleaf Lines, NuPhy Air75 V3, Logitech G102, Philips Hue), and always
 restores each device's previous state afterwards.
-
-The full plan (architecture, phases, device notes) lives in `PRs/PLAN.md`. That directory is **gitignored and
-private**, so it exists only on the author's machine. Read it when present and the task mentions a phase. Never
-commit it, and never copy private planning notes into tracked files.
 
 ## Commands
 
@@ -48,7 +40,9 @@ All four checks (pytest, ruff check, ruff format, mypy) must pass before any com
 
 ## Code style
 
-- Python 3.12+, fully type-annotated (mypy strict), ruff with line length 100.
+- Python 3.12+, fully type-annotated (mypy strict). Formatting and lint rules live in `pyproject.toml` (`[tool.ruff]`).
+- A PostToolUse hook (`.claude/hooks/ruff.sh`) runs `ruff format` and `ruff check --fix` on every edited `.py` file.
+  Fix any lint errors it reports instead of working around them.
 - Keep modules small and dependency-light. Add a dependency only when the plan calls for it or after asking.
 - Comments explain *why*, not *what*. Match the density of surrounding code.
 - Every new behaviour gets a test. Use the `console` driver or injected `sleep`/`clock` instead of real time or hardware.
@@ -74,7 +68,19 @@ All four checks (pytest, ruff check, ruff format, mypy) must pass before any com
   Approval for one PR does not carry over to the next.
 - **Never force-push**, skip hooks (`--no-verify`), or change git config.
 - Never commit `PRs/`, `CLAUDE.local.md`, secrets, device tokens, or personal config files.
-- When asked to open a PR: use `gh pr create` against `main`. The body has a **Summary** (what and why),
-  **Changes** (bullets), and **Testing** (commands run and manual checks, including hardware tested if any).
-  Keep one phase or concern per PR.
+- When asked to open a PR: use `gh pr create` against `main`. Keep one phase or concern per PR, and keep the body
+  concise, using this template:
+
+  ```markdown
+  <One or two sentences: what this PR does.>
+
+  ## Purpose
+  <Why it's needed: the problem, goal, or plan phase it serves.>
+
+  ## Solution
+  <How it works: key design decisions and trade-offs, as short bullets. Not a file-by-file list.>
+
+  ## Testing
+  <Commands run and manual checks, including any hardware tested.>
+  ```
 - At the end of a task, report what was committed (branch and commit list) and what was left uncommitted.
