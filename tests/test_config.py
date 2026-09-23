@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from ambient.config import ConfigError, json_schema, load_config, parse_config
+from ambient.config import ConfigError, json_schema, load_config, parse_config, update_device
 from ambient.effects import RGB, Flash, Pulse
 
 EXAMPLE = Path(__file__).parent.parent / "examples" / "config.yaml"
@@ -111,3 +111,44 @@ def test_json_schema_describes_colors_as_strings() -> None:
     schema = json_schema()
     solid = schema["$defs"]["Solid"]["properties"]["color"]
     assert solid["type"] == "string"
+
+
+def test_update_device_preserves_comments_and_backs_up(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    original = EXAMPLE.read_text()
+    path.write_text(original)
+    path.chmod(0o640)
+
+    backup = update_device(path, "lines", {"driver": "nanoleaf", "host": "10.0.0.2", "token": "t"})
+
+    assert backup == tmp_path / "config.yaml.bak"
+    assert backup.read_text() == original
+    text = path.read_text()
+    assert "# prints effects to the terminal; no hardware needed" in text
+    config = load_config(path)
+    assert config.devices["lines"].options == {"host": "10.0.0.2", "token": "t"}
+    assert config.devices["desk"].baseline is not None
+    assert path.stat().st_mode & 0o777 == 0o640
+
+
+def test_update_device_merges_into_existing_device(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text("devices:\n  lines:\n    driver: nanoleaf\n    host: old\n    port: 1\n")
+    update_device(path, "lines", {"host": "new", "token": "t"})
+    assert load_config(path).devices["lines"].options == {"host": "new", "port": 1, "token": "t"}
+
+
+def test_update_device_creates_private_file(tmp_path: Path) -> None:
+    path = tmp_path / "ambient" / "config.yaml"
+    assert update_device(path, "lines", {"driver": "nanoleaf", "token": "t"}) is None
+    assert load_config(path).devices["lines"].driver == "nanoleaf"
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_update_device_refuses_invalid_result(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text("version: 1\n")
+    with pytest.raises(ConfigError):
+        update_device(path, "lines", {"baseline": {"color": "nope"}})
+    assert path.read_text() == "version: 1\n"
+    assert not (tmp_path / "config.yaml.bak").exists()
