@@ -58,7 +58,7 @@ def test_spawn_worker_detaches(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(subprocess, "Popen", lambda args, **kw: calls.append((args, kw)))
     fire.spawn_worker("Stop")
     [(args, kwargs)] = calls
-    assert args == [sys.executable, "-m", "ambient.worker", "Stop"]
+    assert args == [sys.executable, "-P", "-m", "ambient.worker", "Stop"]
     assert kwargs["start_new_session"] is True
     assert kwargs["stdout"] is subprocess.DEVNULL
     assert kwargs["stderr"] is subprocess.DEVNULL

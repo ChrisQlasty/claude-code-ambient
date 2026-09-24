@@ -23,9 +23,11 @@ def event_name(payload: bytes) -> str | None:
 
 def spawn_worker(event: str) -> None:
     # A new session detaches the worker from Claude Code's process group, so the hook returns
-    # right away and the effect survives the hook process exiting.
+    # right away and the effect survives the hook process exiting. ``-P`` keeps the cwd (the
+    # user's project) off sys.path, so a project's own ``yaml.py`` or ``ambient/`` can't
+    # shadow the worker's imports.
     subprocess.Popen(
-        [sys.executable, "-m", "ambient.worker", event],
+        [sys.executable, "-P", "-m", "ambient.worker", event],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
