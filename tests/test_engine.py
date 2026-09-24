@@ -1,4 +1,6 @@
 import io
+import os
+import time
 from typing import Any
 
 import pytest
@@ -98,6 +100,18 @@ def test_baseline_left_by_a_crashed_effect_is_restored() -> None:
     assert not any("snapshot" in line for line in lines)
     assert lines[-1] == "[desk] restore   #123456  10%"
     assert engine.load_baseline("desk") is None
+
+
+def test_stale_baseline_is_ignored_and_replaced(caplog: pytest.LogCaptureFixture) -> None:
+    engine.save_baseline("desk", {"color": "#123456", "brightness": 10})
+    old = time.time() - engine.BASELINE_MAX_AGE - 60
+    os.utime(engine._baseline_path("desk"), (old, old))
+    outputs = Outputs()
+    assert engine.play_on_device("desk", DESK, [RED], driver_factory=outputs)
+    lines = outputs.lines("desk")
+    assert lines[0] == "[desk] snapshot  #ffffff  60%"
+    assert lines[-1] == "[desk] restore   #ffffff  60%"
+    assert "ignoring baseline" in caplog.text
 
 
 def test_baseline_is_persisted_while_playing() -> None:

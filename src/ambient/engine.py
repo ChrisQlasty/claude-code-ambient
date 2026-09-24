@@ -4,6 +4,8 @@ Each device is guarded by a file lock, so overlapping hooks play one after anoth
 one snapshotting another's mid-flash state. The snapshot is also persisted as a *baseline*
 before playing and removed only after a successful restore: if a worker dies mid-effect, the
 next effect restores to that baseline rather than to whatever the dead worker left behind.
+Baselines older than ``BASELINE_MAX_AGE`` are ignored: by then the user has likely changed the
+device by hand, and restoring a days-old state would clobber that.
 """
 
 import contextlib
@@ -26,6 +28,7 @@ from ambient.effects import AnyEffect
 log = logging.getLogger(__name__)
 
 LOCK_TIMEOUT = 5.0
+BASELINE_MAX_AGE = 300.0
 _LOCK_POLL = 0.05
 
 DriverFactory = Callable[[str, DeviceConfig], Driver]
@@ -152,9 +155,18 @@ def _baseline_path(device_id: str) -> Path:
     return paths.baseline_dir() / f"{_safe_name(device_id)}.json"
 
 
-def load_baseline(device_id: str) -> DeviceState | None:
+def load_baseline(
+    device_id: str,
+    *,
+    max_age: float = BASELINE_MAX_AGE,
+    now: Callable[[], float] = time.time,
+) -> DeviceState | None:
     path = _baseline_path(device_id)
     try:
+        age = now() - path.stat().st_mtime
+        if age > max_age:
+            log.warning("%s: ignoring baseline from %.0fs ago", device_id, age)
+            return None
         state = json.loads(path.read_text())
     except FileNotFoundError:
         return None
