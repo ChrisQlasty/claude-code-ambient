@@ -1,16 +1,20 @@
 """The ``ambient`` command line."""
 
+import difflib
+import logging
+from collections import deque
 from pathlib import Path
 from typing import Annotated, Literal
 
 import typer
 from pydantic import TypeAdapter, ValidationError
 
-from ambient import paths
+from ambient import engine, fire, hooks_install, log, paths
 from ambient.config import Config, ConfigError, DeviceConfig, load_config, update_device
 from ambient.drivers import UnknownDriverError, available_drivers, get_driver
 from ambient.drivers.base import Driver, DriverError
 from ambient.effects import AnyEffect, Effect
+from ambient.events import HookEvent
 
 app = typer.Typer(no_args_is_help=True, help="Ambient light effects for Claude Code events.")
 config_app = typer.Typer(no_args_is_help=True, help="Inspect and validate the config file.")
@@ -169,6 +173,96 @@ def _discover_one(driver_cls: type[Driver]) -> str:
         raise _fail("no devices found; pass --host")
     listing = ", ".join(f"{d.name} ({d.host})" for d in found)
     raise _fail(f"several devices found, pass --host: {listing}")
+
+
+@app.command("fire")
+def fire_cmd() -> None:
+    """Hook entrypoint: read the hook JSON from stdin and play its effects in the background."""
+    fire.main()
+
+
+@app.command()
+def simulate(
+    event: Annotated[HookEvent, typer.Argument(help="Hook event to simulate.")],
+    config_path: ConfigOption = None,
+) -> None:
+    """Play the effects configured for EVENT in the foreground, as if its hook had fired."""
+    config = _load(config_path, required=True)
+    if not engine.resolve(config, event):
+        typer.echo(f"no effects configured for {event}")
+        return
+    logger = log.setup()
+    # Also surface dropped or failed effects in the terminal, not just the log file.
+    stderr = logging.StreamHandler()
+    stderr.setLevel(logging.WARNING)
+    stderr.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+    logger.addHandler(stderr)
+    try:
+        engine.run_event(config, event)
+    finally:
+        logger.removeHandler(stderr)
+
+
+SettingsOption = Annotated[
+    Path | None,
+    typer.Option(
+        "--settings", help="Claude Code settings file (default: ~/.claude/settings.json)."
+    ),
+]
+DryRunOption = Annotated[bool, typer.Option("--dry-run", help="Show the change without writing.")]
+
+
+@app.command("install-hooks")
+def install_hooks(settings: SettingsOption = None, dry_run: DryRunOption = False) -> None:
+    """Add `ambient fire` hooks to Claude Code's settings (backs the file up first)."""
+    try:
+        command = hooks_install.fire_command(hooks_install.ambient_executable())
+        change = hooks_install.plan_install(settings or hooks_install.settings_file(), command)
+    except hooks_install.HooksError as exc:
+        raise _fail(str(exc)) from exc
+    _apply_hooks_change(change, dry_run, done="installed hooks")
+
+
+@app.command("uninstall-hooks")
+def uninstall_hooks(settings: SettingsOption = None, dry_run: DryRunOption = False) -> None:
+    """Remove `ambient fire` hooks from Claude Code's settings (backs the file up first)."""
+    try:
+        change = hooks_install.plan_uninstall(settings or hooks_install.settings_file())
+    except hooks_install.HooksError as exc:
+        raise _fail(str(exc)) from exc
+    _apply_hooks_change(change, dry_run, done="removed hooks")
+
+
+def _apply_hooks_change(change: hooks_install.Change, dry_run: bool, *, done: str) -> None:
+    if not change.changed:
+        typer.echo(f"{change.path}: already up to date")
+        return
+    if dry_run:
+        diff = difflib.unified_diff(
+            (change.before or "").splitlines(keepends=True),
+            (change.after or "").splitlines(keepends=True),
+            fromfile=str(change.path),
+            tofile=f"{change.path} (new)",
+        )
+        typer.echo("".join(diff), nl=False)
+        return
+    backup = hooks_install.apply(change)
+    typer.secho(f"{done} in {change.path}", fg=typer.colors.GREEN)
+    if backup:
+        typer.echo(f"backup: {backup}")
+
+
+@app.command()
+def logs(lines: Annotated[int, typer.Option("--lines", "-n", min=1)] = 50) -> None:
+    """Show the end of the log file."""
+    path = paths.log_file()
+    typer.echo(f"# {path}", err=True)
+    try:
+        with path.open(encoding="utf-8", errors="replace") as handle:
+            tail = deque(handle, maxlen=lines)
+    except FileNotFoundError:
+        return
+    typer.echo("".join(tail), nl=False)
 
 
 @config_app.command("path")
