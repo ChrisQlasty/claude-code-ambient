@@ -2,6 +2,9 @@
 PRs/
 CLAUDE.local.md
 
+# Claude Code git worktrees
+.claude/worktrees/
+
 # Python
 __pycache__/
 *.py[cod]
