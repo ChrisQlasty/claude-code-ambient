@@ -19,7 +19,13 @@ All four checks (pytest, ruff check, ruff format, mypy) must pass before any com
 
 ## Layout
 
+- `src/ambient/main.py`: console-script entry point. Routes `ambient fire` to `fire.py` without importing the typer app.
 - `src/ambient/cli.py`: typer app (`ambient`).
+- `src/ambient/fire.py`: hook entrypoint (stdlib-only). Reads stdin JSON and spawns `worker.py` detached.
+- `src/ambient/worker.py`, `src/ambient/engine.py`: load config, then per device lock → snapshot or persisted
+  baseline → play → restore.
+- `src/ambient/hooks_install.py`: merge/remove `ambient fire` hooks in Claude Code's `settings.json`.
+- `src/ambient/events.py`: hook events handled (`UserPromptSubmit`, `Stop`). `log.py`: file logging.
 - `src/ambient/config.py`: pydantic models for `~/.config/ambient/config.yaml`, YAML loading, and JSON Schema export.
 - `src/ambient/effects.py`: effect models (`solid`/`flash`/`pulse`) and the frame/timeline generator.
 - `src/ambient/drivers/`: `base.py` (the `Driver` ABC and `Capability`) and one module per device. Drivers are
