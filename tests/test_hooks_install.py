@@ -136,6 +136,19 @@ def test_apply_backs_up_the_original(settings: Path) -> None:
     assert json.loads(second.read_text())["hooks"]
 
 
+def test_apply_writes_through_a_symlink(settings: Path, tmp_path: Path) -> None:
+    real = tmp_path / "dotfiles" / "settings.json"
+    write(real, {"model": "opus"})
+    settings.parent.mkdir(parents=True)
+    settings.symlink_to(real)
+    backup = hi.apply(hi.plan_install(settings, CMD))
+    assert settings.is_symlink()
+    assert settings.resolve() == real.resolve()
+    assert json.loads(real.read_text())["hooks"]
+    assert backup is not None
+    assert json.loads(backup.read_text()) == {"model": "opus"}
+
+
 def test_uninstall_removes_only_ours(settings: Path) -> None:
     other = {"hooks": [{"type": "command", "command": "say done"}]}
     write(

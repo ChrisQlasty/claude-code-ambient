@@ -100,10 +100,13 @@ def apply(change: Change) -> Path | None:
     if change.path.exists():
         backup = _backup_path(change.path)
         shutil.copy2(change.path, backup)
-    change.path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = change.path.with_name(f".{change.path.name}.ambient-tmp")
+    # Write through a symlink (e.g. settings.json kept in a dotfiles repo) rather than
+    # replacing the link itself with a plain file.
+    target = change.path.resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(f".{target.name}.ambient-tmp")
     tmp.write_text(change.after)
-    os.replace(tmp, change.path)
+    os.replace(tmp, target)
     return backup
 
 
