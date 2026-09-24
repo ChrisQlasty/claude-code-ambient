@@ -7,8 +7,9 @@ import typer
 from pydantic import TypeAdapter, ValidationError
 
 from ambient import paths
-from ambient.config import Config, ConfigError, DeviceConfig, load_config
+from ambient.config import Config, ConfigError, DeviceConfig, load_config, update_device
 from ambient.drivers import UnknownDriverError, available_drivers, get_driver
+from ambient.drivers.base import Driver, DriverError
 from ambient.effects import AnyEffect, Effect
 
 app = typer.Typer(no_args_is_help=True, help="Ambient light effects for Claude Code events.")
@@ -72,20 +73,102 @@ def test(
 
     device_config = _resolve_device(_load(config_path, required=False), device)
     try:
-        driver_cls = get_driver(device_config.driver)
+        driver = _driver_cls(device_config.driver)(device, device_config)
+        driver.connect()
+        try:
+            state = driver.snapshot()
+            try:
+                driver.play(effect)
+            finally:
+                driver.restore(state)
+        finally:
+            driver.close()
+    except DriverError as exc:
+        raise _fail(str(exc)) from exc
+
+
+@app.command()
+def discover(
+    driver: Annotated[str | None, typer.Argument(help="Only this driver (default: all).")] = None,
+    timeout: Annotated[float, typer.Option(help="Seconds to listen.")] = 3.0,
+) -> None:
+    """Find devices on the local network."""
+    names = [driver] if driver else available_drivers()
+    try:
+        found = [d for name in names for d in _driver_cls(name).discover(timeout)]
+    except DriverError as exc:
+        raise _fail(str(exc)) from exc
+    if not found:
+        typer.echo("no devices found")
+        return
+    for d in found:
+        details = " ".join(f"{k}={v}" for k, v in sorted(d.details.items()))
+        typer.echo(f"{d.driver}\t{d.name}\t{d.host}:{d.port}\t{details}".rstrip())
+
+
+@app.command()
+def pair(
+    device: Annotated[str, typer.Argument(help="Device name for the config, e.g. 'lines'.")],
+    driver: Annotated[
+        str | None, typer.Option(help="Driver, if the device isn't configured yet.")
+    ] = None,
+    host: Annotated[str | None, typer.Option(help="Device address (default: discover).")] = None,
+    timeout: Annotated[float, typer.Option(help="Seconds to wait for pairing mode.")] = 60.0,
+    config_path: ConfigOption = None,
+) -> None:
+    """Pair with a device and save its credentials to the config file."""
+    path = config_path or paths.config_file()
+    existing = _load(config_path, required=False).devices.get(device)
+    driver_name = driver or (existing.driver if existing else None)
+    if driver_name is None:
+        raise _fail(f"{device!r} isn't configured; pass --driver (e.g. --driver nanoleaf)")
+    driver_cls = _driver_cls(driver_name)
+    if driver_cls.pair is Driver.pair:
+        raise _fail(f"the {driver_name} driver doesn't need pairing")
+    options = existing.options if existing and existing.driver == driver_name else {}
+    if host:
+        options["host"] = host
+    if "host" not in options:
+        options["host"] = _discover_one(driver_cls)
+
+    try:
+        device_config = DeviceConfig.model_validate({"driver": driver_name, **options})
+        instance = driver_cls(device, device_config)
+        typer.echo(
+            f"Pairing with {options['host']}: {driver_cls.pairing_hint} "
+            f"(waiting up to {timeout:.0f} s)..."
+        )
+        try:
+            fields = instance.pair(timeout)
+        finally:
+            instance.close()
+        backup = update_device(path, device, {"driver": driver_name, **fields})
+    except (DriverError, ConfigError) as exc:
+        raise _fail(str(exc)) from exc
+    typer.secho(f"paired {device!r}, saved to {path}", fg=typer.colors.GREEN)
+    if backup:
+        typer.echo(f"previous config backed up to {backup}")
+
+
+def _driver_cls(name: str) -> type[Driver]:
+    try:
+        return get_driver(name)
     except UnknownDriverError as exc:
         raise _fail(str(exc)) from exc
 
-    driver = driver_cls(device, device_config)
-    driver.connect()
+
+def _discover_one(driver_cls: type[Driver]) -> str:
+    typer.echo(f"No host given, discovering {driver_cls.name} devices...")
     try:
-        state = driver.snapshot()
-        try:
-            driver.play(effect)
-        finally:
-            driver.restore(state)
-    finally:
-        driver.close()
+        found = driver_cls.discover(3.0)
+    except DriverError as exc:
+        raise _fail(str(exc)) from exc
+    if len(found) == 1:
+        return found[0].host
+    if not found:
+        raise _fail("no devices found; pass --host")
+    listing = ", ".join(f"{d.name} ({d.host})" for d in found)
+    raise _fail(f"several devices found, pass --host: {listing}")
 
 
 @config_app.command("path")
