@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-ambient = "ambient.cli:app"
+ambient = "ambient.main:main"
 
 [project.entry-points."ambient.drivers"]
 console = "ambient.drivers.console:ConsoleDriver"
