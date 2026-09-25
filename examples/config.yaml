@@ -17,7 +17,7 @@ events:
   UserPromptSubmit:
     - device: desk
       effect: { type: flash, color: "#3050ff", duration: 0.6, times: 1 }
-  Notification:
+  Notification:              # accepted, but not handled yet
     - device: desk
       effect: { type: pulse, color: "#ffa000", duration: 3 }
   Stop:

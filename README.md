@@ -3,8 +3,9 @@
 Turn [Claude Code](https://claude.com/claude-code) hook events into ambient light effects on your devices.
 For example, your lights blink green when Claude finishes, then return to exactly what they showed before.
 
-> **Status:** early development. The `console` test driver and the Nanoleaf driver work. More devices (NuPhy Air75 V3,
-> Logitech G102, Philips Hue) and the Claude Code hook integration are still to come.
+> **Status:** early development. The `console` test driver, the Nanoleaf driver and the Claude Code hook integration
+> (`UserPromptSubmit` and `Stop`) work. More devices (NuPhy Air75 V3, Logitech G102, Philips Hue) and the
+> `Notification` event are still to come.
 
 ## Requirements
 
@@ -35,6 +36,24 @@ uv run ambient test lines flash '#ff0000' --duration 2 --times 3
 It backs up the previous file to `config.yaml.bak` and keeps its comments. After an effect, the lights return to
 their previous scene or color, brightness, and on/off state. A dynamic scene started from another app (screen mirroring,
 rhythm, external control) can't be selected again by name, so it comes back as its last solid color.
+
+## Claude Code hooks
+
+```sh
+uv run ambient install-hooks --dry-run   # show the change to ~/.claude/settings.json
+uv run ambient install-hooks             # add the hooks (backs the file up first)
+uv run ambient simulate Stop             # play what a hook would, in the foreground
+uv run ambient logs                      # errors from hooks end up here, never in Claude Code
+uv run ambient uninstall-hooks
+```
+
+`install-hooks` adds `<absolute path>/ambient fire` for `UserPromptSubmit` and `Stop`, next to any hooks you already have,
+and is safe to re-run. `ambient fire` reads the hook's JSON from stdin, starts a detached worker that plays the effects,
+and exits within a few tens of milliseconds, silently and always with status 0.
+
+Each device is locked while an effect plays, so overlapping events queue up (for up to 5 s, then they're dropped) instead of
+capturing each other's flashes. The device's state before the effect is saved to `~/.cache/ambient/baseline/` until it has
+been restored, so an interrupted effect is still undone by the next one.
 
 ## Configuration
 
