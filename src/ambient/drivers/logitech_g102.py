@@ -16,7 +16,9 @@ The mouse can't report its current lighting, so restoring depends on who was dri
 import ctypes
 import logging
 import sys
+import weakref
 from collections.abc import Callable
+from types import ModuleType
 from typing import Any, ClassVar, Protocol
 
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -134,8 +136,7 @@ class Hidpp:
 
 class HidapiTransport:
     def __init__(self, path: bytes) -> None:
-        import hid
-
+        hid = _import_hid()
         _allow_shared_open(hid.__file__)
         self._device = hid.device()
         try:
@@ -169,11 +170,31 @@ def _allow_shared_open(library: str) -> None:
         log.debug("hid_darwin_set_open_exclusive unavailable; opening exclusively")
 
 
-def _enumerate(product_id: int | None) -> list[dict[str, Any]]:
+def _import_hid() -> Any:  # hidapi ships no type information
     try:
         import hid
     except ImportError as exc:
         raise DriverError(f"hidapi isn't available: {exc}") from exc
+    _skip_exit_cleanup(hid)
+    return hid
+
+
+def _skip_exit_cleanup(module: ModuleType) -> None:
+    """Drop the ``hid_exit`` call the hidapi module registers for interpreter exit.
+
+    On macOS, ``hid_init`` attaches to the run loop of whichever thread first used hidapi (an
+    engine worker thread), and ``hid_exit`` on the main thread at exit then aborts the process
+    while detaching from that thread's run loop. The OS releases the devices on exit anyway.
+    """
+    registry: dict[weakref.finalize[Any, Any], Any] = getattr(weakref.finalize, "_registry", {})
+    for finalizer in list(registry):
+        info = finalizer.peek()
+        if info is not None and info[0] is module:
+            finalizer.detach()
+
+
+def _enumerate(product_id: int | None) -> list[dict[str, Any]]:
+    hid = _import_hid()
     return [
         d
         for d in hid.enumerate(VENDOR_ID, product_id or 0)

@@ -1,4 +1,6 @@
 import itertools
+import types
+import weakref
 from typing import Any
 
 import pytest
@@ -271,6 +273,22 @@ def test_connect_without_a_mouse() -> None:
     driver = LogitechG102Driver("mouse", DeviceConfig(driver="logitech_g102"))
     with pytest.raises(DriverError, match="no Logitech G102"):
         driver.connect()
+
+
+def test_hidapi_exit_cleanup_is_skipped() -> None:
+    # hidapi registers hid_exit like this; running it at exit can abort the process on macOS.
+    module = types.ModuleType("hid")
+    calls: list[str] = []
+    finalizer = weakref.finalize(module, calls.append, "hid_exit")
+    other_module = types.ModuleType("other")
+    other = weakref.finalize(other_module, calls.append, "other")
+
+    logitech_g102._skip_exit_cleanup(module)
+
+    assert not finalizer.alive
+    assert other.alive
+    other()
+    assert calls == ["other"]
 
 
 # --- HID++ transport ---
