@@ -61,6 +61,7 @@ devices:
   mouse:
     driver: logitech_g102
     baseline: { color: "#ffffff", brightness: 60 }   # only used when G HUB controls the mouse
+    transition: 0.25   # seconds to fade into each frame, like Nanoleaf's built-in fading; 0 = sharp
 ```
 
 ## Claude Code hooks

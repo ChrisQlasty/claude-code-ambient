@@ -141,3 +141,32 @@ def _render_pulse(effect: Pulse, fps: int) -> list[Frame]:
                 Frame(i * period + phase * period, effect.color, round(effect.level * intensity))
             )
     return frames
+
+
+def smooth(timeline: Timeline, transition: float, fps: int = DEFAULT_FPS) -> Timeline:
+    """Ramp into each frame over ``transition`` seconds instead of switching at once.
+
+    For devices that change instantly, so a flash fades like on devices with built-in fading.
+    The first frame fades in from dark, and a ramp never runs past its frame, so every frame's
+    value is still reached.
+    """
+    if transition <= 0 or not timeline.frames:
+        return timeline
+    frames = timeline.frames
+    ends = [f.t for f in frames[1:]] + [timeline.duration]
+    previous = Frame(0.0, frames[0].color, 0)
+    smoothed = []
+    for frame, end in zip(frames, ends, strict=True):
+        ramp = min(transition, end - frame.t)
+        steps = max(1, round(ramp * fps))
+        for step in range(1, steps + 1):
+            smoothed.append(
+                Frame(frame.t + (step - 1) * ramp / steps, *_mix(previous, frame, step / steps))
+            )
+        previous = frame
+    return Timeline(smoothed, timeline.duration)
+
+
+def _mix(a: Frame, b: Frame, amount: float) -> tuple[RGB, int]:
+    color = RGB(*(round(x + (y - x) * amount) for x, y in zip(a.color, b.color, strict=True)))
+    return color, round(a.brightness + (b.brightness - a.brightness) * amount)

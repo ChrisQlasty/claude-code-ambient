@@ -21,11 +21,11 @@ from collections.abc import Callable
 from types import ModuleType
 from typing import Any, ClassVar, Protocol
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ambient.config import DeviceConfig
 from ambient.drivers.base import Capability, DeviceState, DiscoveredDevice, Driver, DriverError
-from ambient.effects import RGB, Frame
+from ambient.effects import RGB, AnyEffect, Frame, Timeline, render, smooth
 
 log = logging.getLogger(__name__)
 
@@ -216,6 +216,8 @@ class G102Options(BaseModel):
     # Another USB product ID that speaks the same protocol; by default any known model is used.
     product_id: int | None = None
     timeout: float = 1.0
+    # Seconds to fade into each frame; the mouse itself switches colors instantly. 0 disables.
+    transition: float = Field(default=0.25, ge=0, le=5)
 
 
 def scale(color: RGB, brightness: int) -> RGB:
@@ -227,6 +229,8 @@ class LogitechG102Driver(Driver):
     capabilities: ClassVar[frozenset[Capability]] = frozenset(
         {Capability.COLOR, Capability.BRIGHTNESS}
     )
+    # A frame is two ~4 ms USB requests, so fades can be smoother than the default rate.
+    fps: ClassVar[int] = 30
 
     def __init__(
         self,
@@ -288,6 +292,9 @@ class LogitechG102Driver(Driver):
                 "and can't report its color; set a 'baseline' (color, brightness) in the config"
             )
         return state | {"color": baseline.color.to_hex(), "brightness": baseline.brightness}
+
+    def timeline(self, effect: AnyEffect) -> Timeline:
+        return smooth(render(effect, self.fps), self.options.transition, self.fps)
 
     def apply_frame(self, frame: Frame) -> None:
         self._set_color(scale(frame.color, frame.brightness))

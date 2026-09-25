@@ -128,7 +128,8 @@ def make_driver(
 ) -> LogitechG102Driver:
     clock = FakeClock()
     config = DeviceConfig.model_validate(
-        {"driver": "logitech_g102", "baseline": baseline, **options}
+        # Exact frames by default; fading has its own test.
+        {"driver": "logitech_g102", "baseline": baseline, "transition": 0, **options}
     )
     driver = LogitechG102Driver("mouse", config, transport=device, sleep=clock.sleep, clock=clock)
     driver.connect()
@@ -165,6 +166,18 @@ def test_frames_set_all_leds_scaled_by_brightness() -> None:
         [1, 128, 0, 50, 2, 128, 0, 50, 3, 128, 0, 50, 0xFF, 0, 0, 0]
     )
     assert device.shown == [(128, 0, 50), OFF]
+
+
+def test_fades_between_frames_by_default() -> None:
+    device = FakeG102()
+    driver = make_driver(device, transition=0.25)
+    driver.play(Flash(color=RGB(0, 200, 0), duration=2, times=1))
+
+    greens = [g for _, g, _ in device.shown]
+    peak = greens.index(200)
+    assert greens[0] < 50 and peak > 3  # fades in over several frames
+    assert greens[peak:] == sorted(greens[peak:], reverse=True)  # then fades out
+    assert greens[-1] == 0
 
 
 def test_repeated_colors_are_sent_once() -> None:

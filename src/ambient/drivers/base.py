@@ -8,7 +8,7 @@ from enum import Enum, auto
 from typing import Any, ClassVar
 
 from ambient.config import DeviceConfig
-from ambient.effects import DEFAULT_FPS, AnyEffect, Frame, render
+from ambient.effects import DEFAULT_FPS, AnyEffect, Frame, Timeline, render
 
 # Opaque, JSON-serializable per-driver state, so it can be persisted as a baseline.
 DeviceState = dict[str, Any]
@@ -86,9 +86,13 @@ class Driver(ABC):
         """Obtain credentials, returned as config fields to store for this device."""
         raise DriverError(f"the {self.name} driver doesn't need pairing")
 
+    def timeline(self, effect: AnyEffect) -> Timeline:
+        """The frames :meth:`play` applies. Drivers can adjust them, e.g. to add fading."""
+        return render(effect, self.fps)
+
     def play(self, effect: AnyEffect) -> None:
         """Play ``effect``, blocking until it finishes."""
-        timeline = render(effect, self.fps)
+        timeline = self.timeline(effect)
         start = self._clock()
         frames = timeline.frames
         for i, frame in enumerate(frames):
