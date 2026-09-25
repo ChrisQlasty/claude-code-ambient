@@ -1,14 +1,15 @@
 """Logitech G102/G203 LIGHTSYNC over HID++ 2.0 (USB).
 
-Frames are sent as each LED cluster's "fixed" effect (feature ``0x8071`` RGB Effects) with the
-color scaled by brightness. Every write uses the RAM-only persistence flag, so nothing reaches the
-mouse's flash.
+In onboard mode the mouse ignores lighting changes, and it ignores the ``0x8071`` fixed-color effect
+in any mode. So for an effect the driver does what OpenRGB's direct mode does: switch to host mode
+(feature ``0x8100``), enable software control (``0x8071``) and write the LEDs one frame at a time
+(``0x8081`` per-LED lighting). None of these are saved to the mouse's flash.
 
-The mouse can't report its current lighting, so restoring depends on who drives it:
+The mouse can't report its current lighting, so restoring depends on who was driving it:
 
-- Onboard mode (the default without G HUB, or with G HUB's "onboard memory mode"): the lighting
-  comes from the active onboard profile (feature ``0x8100``), so re-selecting that profile brings
-  it back exactly. Re-selecting also resets the DPI step, so that is saved and restored too.
+- Onboard mode (the default without G HUB, or with G HUB's "onboard memory mode"): switching back
+  and re-selecting the active onboard profile brings its lighting back exactly. That also resets
+  the DPI step, so the step is saved and restored too.
 - Host mode (G HUB in control) or no onboard profiles: the configured ``baseline`` color is set.
 """
 
@@ -41,21 +42,28 @@ HIDPP10_ERROR = 0x8F
 
 FEATURE_ROOT = 0x0000
 FEATURE_RGB_EFFECTS = 0x8071
+FEATURE_PER_KEY_LIGHTING = 0x8081
 FEATURE_ONBOARD_PROFILES = 0x8100
 
-RGB_GET_INFO = 0
-RGB_SET_CLUSTER_EFFECT = 1
-INDEX_ALL = 0xFF
-EFFECT_FIXED = 0x0001
-# 1 would also write the effect to flash, which must never happen (see CLAUDE.md).
-PERSIST_RAM_ONLY = 0x00
+RGB_SW_CONTROL = 5
+SW_CONTROL_GET = 0
+SW_CONTROL_SET = 1
+# Flags and events OpenRGB enables for direct control of this mouse.
+SW_CONTROL_ON = bytes([3, 7])
 
+PER_KEY_SET_ZONES = 1
+PER_KEY_FRAME_END = 7
+LEDS = (1, 2, 3)  # the mouse's three logo LEDs, set together
+ZONES_END = 0xFF
+
+PROFILES_SET_MODE = 1
 PROFILES_GET_MODE = 2
 PROFILES_SET_CURRENT = 3
 PROFILES_GET_CURRENT = 4
 PROFILES_GET_DPI_INDEX = 11
 PROFILES_SET_DPI_INDEX = 12
 MODE_ONBOARD = 1
+MODE_HOST = 2
 
 _ERRORS = {
     1: "unknown",
@@ -215,9 +223,9 @@ class LogitechG102Driver(Driver):
         self._transport = transport
         self._hidpp: Hidpp | None = None
         self._rgb = 0
+        self._leds = 0
         self._profiles: int | None = None
-        # Cluster index → list position of its fixed effect, which is what setClusterEffect takes.
-        self._fixed: dict[int, int] = {}
+        self._in_control = False
         self._last: RGB | None = None
 
     def connect(self) -> None:
@@ -227,20 +235,14 @@ class LogitechG102Driver(Driver):
             self._transport, timeout=self.options.timeout, clock=self._clock
         )
         rgb = hidpp.feature_index(FEATURE_RGB_EFFECTS)
-        if rgb is None:
-            raise DriverError(f"{self.device_id}: the mouse doesn't support RGB Effects (0x8071)")
-        self._rgb = rgb
+        leds = hidpp.feature_index(FEATURE_PER_KEY_LIGHTING)
+        if rgb is None or leds is None:
+            raise DriverError(
+                f"{self.device_id}: the mouse lacks RGB Effects (0x8071) "
+                "or per-LED lighting (0x8081)"
+            )
+        self._rgb, self._leds = rgb, leds
         self._profiles = hidpp.feature_index(FEATURE_ONBOARD_PROFILES)
-        clusters = hidpp.request(rgb, RGB_GET_INFO, bytes([INDEX_ALL, INDEX_ALL, 0]))[2]
-        for cluster in range(clusters):
-            count = hidpp.request(rgb, RGB_GET_INFO, bytes([cluster, INDEX_ALL, 0]))[4]
-            for index in range(count):
-                info = hidpp.request(rgb, RGB_GET_INFO, bytes([cluster, index, 0]))
-                if int.from_bytes(info[2:4], "big") == EFFECT_FIXED:
-                    self._fixed[cluster] = index
-                    break
-        if not self._fixed:
-            raise DriverError(f"{self.device_id}: the mouse has no fixed-color LED effect")
 
     def close(self) -> None:
         if self._transport is not None:
@@ -250,25 +252,29 @@ class LogitechG102Driver(Driver):
 
     def snapshot(self) -> DeviceState:
         hidpp = self._connected()
+        sw_control = hidpp.request(self._rgb, RGB_SW_CONTROL, bytes([SW_CONTROL_GET]))[1:3]
+        state: DeviceState = {"sw_control": sw_control.hex(), "mode": None}
         if self._profiles is not None:
-            mode = hidpp.request(self._profiles, PROFILES_GET_MODE)[0]
+            state["mode"] = mode = hidpp.request(self._profiles, PROFILES_GET_MODE)[0]
             if mode == MODE_ONBOARD:
                 profile = hidpp.request(self._profiles, PROFILES_GET_CURRENT)[:2]
                 dpi = hidpp.request(self._profiles, PROFILES_GET_DPI_INDEX)[0]
-                return {"profile": profile.hex(), "dpi_index": dpi}
+                return state | {"profile": profile.hex(), "dpi_index": dpi}
         baseline = self.config.baseline
         if baseline is None:
             raise DriverError(
                 f"{self.device_id}: the mouse isn't in onboard mode (is G HUB controlling it?) "
                 "and can't report its color; set a 'baseline' (color, brightness) in the config"
             )
-        return {"color": baseline.color.to_hex(), "brightness": baseline.brightness}
+        return state | {"color": baseline.color.to_hex(), "brightness": baseline.brightness}
 
     def apply_frame(self, frame: Frame) -> None:
         self._set_color(scale(frame.color, frame.brightness))
 
     def restore(self, state: DeviceState) -> None:
         try:
+            sw_control = bytes.fromhex(state["sw_control"])
+            mode = None if state["mode"] is None else int(state["mode"])
             if "profile" in state:
                 profile, dpi = bytes.fromhex(state["profile"]), int(state["dpi_index"])
                 color = None
@@ -276,13 +282,17 @@ class LogitechG102Driver(Driver):
                 color = scale(RGB.from_hex(state["color"]), int(state["brightness"]))
         except (KeyError, TypeError, ValueError) as exc:
             raise DriverError(f"{self.device_id}: invalid saved state: {exc!r}") from exc
+        hidpp = self._connected()
         if color is not None:
             self._set_color(color)
-            return
-        assert self._profiles is not None, "a profile state implies onboard profiles"
-        hidpp = self._connected()
-        hidpp.request(self._profiles, PROFILES_SET_CURRENT, profile)
-        hidpp.request(self._profiles, PROFILES_SET_DPI_INDEX, bytes([dpi]))
+        # Hand control back in the reverse order it was taken.
+        hidpp.request(self._rgb, RGB_SW_CONTROL, bytes([SW_CONTROL_SET]) + sw_control)
+        if self._profiles is not None and mode is not None:
+            hidpp.request(self._profiles, PROFILES_SET_MODE, bytes([mode]))
+            if color is None:
+                hidpp.request(self._profiles, PROFILES_SET_CURRENT, profile)
+                hidpp.request(self._profiles, PROFILES_SET_DPI_INDEX, bytes([dpi]))
+        self._in_control = False
         self._last = None
 
     @classmethod
@@ -300,13 +310,22 @@ class LogitechG102Driver(Driver):
             if d["usage"] == 0x02
         ]
 
+    def _take_control(self) -> None:
+        hidpp = self._connected()
+        if self._profiles is not None:
+            hidpp.request(self._profiles, PROFILES_SET_MODE, bytes([MODE_HOST]))
+        hidpp.request(self._rgb, RGB_SW_CONTROL, bytes([SW_CONTROL_SET]) + SW_CONTROL_ON)
+        self._in_control = True
+
     def _set_color(self, color: RGB) -> None:
         if color == self._last:
             return
+        if not self._in_control:
+            self._take_control()
         hidpp = self._connected()
-        for cluster, index in self._fixed.items():
-            params = bytes([cluster, index, *color]).ljust(12, b"\0") + bytes([PERSIST_RAM_ONLY])
-            hidpp.request(self._rgb, RGB_SET_CLUSTER_EFFECT, params)
+        zones = b"".join(bytes([led, *color]) for led in LEDS)
+        hidpp.request(self._leds, PER_KEY_SET_ZONES, zones + bytes([ZONES_END]))
+        hidpp.request(self._leds, PER_KEY_FRAME_END)
         self._last = color
 
     def _connected(self) -> Hidpp:

@@ -8,6 +8,7 @@ from ambient.drivers import get_driver, logitech_g102
 from ambient.drivers.base import DriverError
 from ambient.drivers.logitech_g102 import (
     FEATURE_ONBOARD_PROFILES,
+    FEATURE_PER_KEY_LIGHTING,
     FEATURE_RGB_EFFECTS,
     Hidpp,
     HidppError,
@@ -18,23 +19,32 @@ from tests.test_drivers import FakeClock
 
 RGB_INDEX = 14
 PROFILES_INDEX = 15
-# Effect ids in list order, as reported by a real G102 LIGHTSYNC: off, fixed, cycle, wave, ...
-EFFECTS = [0x0000, 0x0001, 0x0003, 0x0004, 0x000A]
+LEDS_INDEX = 18
+SW_ON = b"\x03\x07"
+OFF = (0, 0, 0)
 
 
 class FakeG102:
-    """Just enough HID++ 2.0 to exercise the driver: root, 0x8071 and 0x8100."""
+    """Just enough HID++ 2.0 to exercise the driver: root, 0x8071, 0x8081 and 0x8100.
+
+    Like the real mouse, LED writes only show in host mode with software control enabled.
+    """
 
     def __init__(self, *, mode: int = 1, profiles: bool = True) -> None:
-        self.features = {FEATURE_RGB_EFFECTS: RGB_INDEX}
+        self.features = {FEATURE_RGB_EFFECTS: RGB_INDEX, FEATURE_PER_KEY_LIGHTING: LEDS_INDEX}
         if profiles:
             self.features[FEATURE_ONBOARD_PROFILES] = PROFILES_INDEX
+        self.has_profiles = profiles
         self.mode = mode
+        self.sw_control = b"\x00\x00"
         self.profile = b"\x00\x01"
         self.dpi_index = 3
         self.color: tuple[int, ...] | None = None  # None: the onboard profile's own lighting
-        self.effect_writes: list[bytes] = []
+        self.shown: list[tuple[int, ...]] = []
+        self.zone_writes: list[bytes] = []
+        self.mode_changes: list[int] = []
         self.profile_selects: list[bytes] = []
+        self.staged: tuple[int, ...] | None = None
         self.pending: list[bytes] = []
         self.noise: list[bytes] = []
         self.error: int | None = None
@@ -63,23 +73,37 @@ class FakeG102:
 
     # --- device ---
 
+    @property
+    def in_host_control(self) -> bool:
+        return (self.mode == 2 or not self.has_profiles) and self.sw_control == SW_ON
+
     def handle(self, feature: int, function: int, p: bytes) -> bytes:
         if feature == 0 and function == 0:
             return bytes([self.features.get(int.from_bytes(p[:2], "big"), 0)])
-        if feature == RGB_INDEX and function == 0:
-            cluster, effect = p[0], p[1]
-            if cluster == 0xFF:
-                return bytes([0xFF, 0xFF, 1])
-            if effect == 0xFF:
-                return bytes([cluster, 0xFF, 0, 2, len(EFFECTS), 0])
-            return bytes([cluster, effect]) + EFFECTS[effect].to_bytes(2, "big")
-        if feature == RGB_INDEX and function == 1:
-            self.effect_writes.append(bytes(p[:13]))
-            assert EFFECTS[p[1]] == 0x0001
-            self.color = tuple(p[2:5])
+        if feature == RGB_INDEX and function == 5:
+            if p[0] == 1:
+                self.sw_control = bytes(p[1:3])
+            return b"\x00" + self.sw_control
+        if feature == LEDS_INDEX and function == 1:
+            self.zone_writes.append(bytes(p))
+            leds = [p[i : i + 4] for i in range(0, 12, 4)]
+            assert [led[0] for led in leds] == [1, 2, 3] and p[12] == 0xFF
+            assert len({led[1:] for led in leds}) == 1
+            self.staged = tuple(leds[0][1:])
+            return b""
+        if feature == LEDS_INDEX and function == 7:
+            if self.in_host_control and self.staged is not None:
+                self.color = self.staged
+                self.shown.append(self.staged)
             return b""
         if feature == PROFILES_INDEX:
             match function:
+                case 1:
+                    self.mode = p[0]
+                    self.mode_changes.append(p[0])
+                    if self.mode == 1:
+                        self.color = None
+                    return b""
                 case 2:
                     return bytes([self.mode])
                 case 3:
@@ -113,38 +137,32 @@ def test_registered() -> None:
     assert get_driver("logitech_g102") is LogitechG102Driver
 
 
-def test_onboard_mode_restores_by_reselecting_the_profile_and_dpi() -> None:
+def test_onboard_mode_takes_control_then_hands_it_back() -> None:
     device = FakeG102()
     driver = make_driver(device)
 
     state = driver.snapshot()
     driver.play(Flash(color=RGB(0, 255, 96), duration=1, times=2))
-    assert device.color is not None
+    assert device.shown == [(0, 255, 96), OFF, (0, 255, 96), OFF]
     driver.restore(state)
 
-    assert state == {"profile": "0001", "dpi_index": 3}
+    assert state == {"sw_control": "0000", "mode": 1, "profile": "0001", "dpi_index": 3}
+    assert device.mode_changes == [2, 1]  # control is taken once, not per frame
+    assert (device.mode, device.sw_control) == (1, b"\x00\x00")
     assert device.profile_selects == [b"\x00\x01"]
     assert device.color is None
     assert device.dpi_index == 3
 
 
-def test_frames_are_ram_only_fixed_effects_scaled_by_brightness() -> None:
+def test_frames_set_all_leds_scaled_by_brightness() -> None:
     device = FakeG102()
     driver = make_driver(device)
-    driver.play(Flash(color=RGB(255, 0, 100), brightness=50, duration=1, times=2))
+    driver.play(Flash(color=RGB(255, 0, 100), brightness=50, duration=1, times=1))
 
-    # One write per distinct frame: on, off, on, off.
-    assert [w[2:5] for w in device.effect_writes] == [
-        bytes([128, 0, 50]),
-        bytes([0, 0, 0]),
-        bytes([128, 0, 50]),
-        bytes([0, 0, 0]),
-    ]
-    for write in device.effect_writes:
-        assert write[0] == 0  # cluster
-        assert write[1] == EFFECTS.index(0x0001)
-        assert write[5:12] == bytes(7)
-        assert write[12] == 0  # never persisted to flash
+    assert device.zone_writes[0] == bytes(
+        [1, 128, 0, 50, 2, 128, 0, 50, 3, 128, 0, 50, 0xFF, 0, 0, 0]
+    )
+    assert device.shown == [(128, 0, 50), OFF]
 
 
 def test_repeated_colors_are_sent_once() -> None:
@@ -152,9 +170,8 @@ def test_repeated_colors_are_sent_once() -> None:
     driver = make_driver(device)
     # A long, dim pulse renders many frames that round to the same color.
     driver.play(Pulse(color=RGB(4, 0, 0), duration=2))
-    colors = [w[2:5] for w in device.effect_writes]
-    assert all(a != b for a, b in itertools.pairwise(colors))
-    assert len(colors) < 40
+    assert all(a != b for a, b in itertools.pairwise(device.shown))
+    assert len(device.zone_writes) < 40
 
 
 def test_host_mode_uses_baseline() -> None:
@@ -165,9 +182,23 @@ def test_host_mode_uses_baseline() -> None:
     driver.play(Flash(color=RGB(255, 0, 0), duration=1))
     driver.restore(state)
 
-    assert state == {"color": "#ffffff", "brightness": 60}
-    assert device.color == (153, 153, 153)
+    assert state == {"sw_control": "0000", "mode": 2, "color": "#ffffff", "brightness": 60}
+    assert device.shown[-1] == (153, 153, 153)
+    assert (device.mode, device.sw_control) == (2, b"\x00\x00")
     assert device.profile_selects == []
+
+
+def test_without_onboard_profiles_uses_baseline() -> None:
+    device = FakeG102(profiles=False)
+    driver = make_driver(device, baseline=Baseline(color=RGB(0, 0, 255)))
+
+    state = driver.snapshot()
+    driver.play(Flash(color=RGB(255, 0, 0), duration=1))
+    driver.restore(state)
+
+    assert state["mode"] is None
+    assert device.shown == [(255, 0, 0), OFF, (0, 0, 255)]
+    assert device.mode_changes == []
 
 
 @pytest.mark.parametrize("device", [FakeG102(mode=2), FakeG102(profiles=False)])
@@ -175,21 +206,34 @@ def test_without_onboard_mode_or_baseline_asks_for_one(device: FakeG102) -> None
     driver = make_driver(device)
     with pytest.raises(DriverError, match="baseline"):
         driver.snapshot()
-    assert device.effect_writes == []
+    assert device.zone_writes == []
+    assert device.mode_changes == []
 
 
-def test_restore_after_a_baseline_left_by_another_process() -> None:
-    # The engine may hand restore() a persisted state from an interrupted effect.
-    device = FakeG102()
+def test_restore_a_state_persisted_by_an_interrupted_effect() -> None:
+    # A new process restores the engine's saved baseline while the mouse is still in host mode.
+    device = FakeG102(mode=2)
+    device.sw_control = SW_ON
     driver = make_driver(device)
-    driver.restore({"color": "#00ff00", "brightness": 100})
-    assert device.color == (0, 255, 0)
+    driver.restore({"sw_control": "0000", "mode": 1, "profile": "0001", "dpi_index": 2})
+
+    assert (device.mode, device.sw_control, device.dpi_index) == (1, b"\x00\x00", 2)
+    assert device.color is None
 
 
-def test_invalid_state() -> None:
-    driver = make_driver(FakeG102())
+@pytest.mark.parametrize(
+    "state",
+    [
+        {"sw_control": "0000", "mode": 1, "profile": "zz", "dpi_index": 1},
+        {"mode": 1, "profile": "0001", "dpi_index": 1},
+        {"sw_control": "0000", "mode": 2},
+    ],
+)
+def test_invalid_state(state: dict[str, Any]) -> None:
+    device = FakeG102()
     with pytest.raises(DriverError, match="invalid saved state"):
-        driver.restore({"profile": "zz", "dpi_index": 1})
+        make_driver(device).restore(state)
+    assert device.mode_changes == []
 
 
 def test_close_closes_transport() -> None:
@@ -198,10 +242,11 @@ def test_close_closes_transport() -> None:
     assert device.closed
 
 
-def test_missing_rgb_feature() -> None:
+@pytest.mark.parametrize("feature", [FEATURE_RGB_EFFECTS, FEATURE_PER_KEY_LIGHTING])
+def test_missing_feature(feature: int) -> None:
     device = FakeG102()
-    device.features = {}
-    with pytest.raises(DriverError, match="0x8071"):
+    del device.features[feature]
+    with pytest.raises(DriverError, match=r"0x8071.*0x8081"):
         make_driver(device)
 
 
