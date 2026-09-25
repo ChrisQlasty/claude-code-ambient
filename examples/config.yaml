@@ -12,6 +12,11 @@ devices:
   #   driver: nanoleaf         # `ambient pair lines --driver nanoleaf` fills in host and token
   #   host: 192.168.1.50
   #   token: "..."
+  # mouse:
+  #   driver: logitech_g102    # USB; no pairing needed
+  #   baseline:                # restored only when G HUB controls the mouse
+  #     color: "#ffffff"
+  #     brightness: 60
 
 events:
   UserPromptSubmit:

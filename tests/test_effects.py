@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from ambient.effects import RGB, Flash, Pulse, Solid, render
+from ambient.effects import RGB, Flash, Frame, Pulse, Solid, Timeline, render, smooth
 
 RED = RGB(255, 0, 0)
 
@@ -60,3 +60,37 @@ def test_brightness_defaults_to_full() -> None:
 def test_color_rejects_non_hex_and_out_of_range(color: object) -> None:
     with pytest.raises(ValidationError, match="invalid color"):
         Solid.model_validate({"color": color})
+
+
+def test_smooth_ramps_into_each_frame() -> None:
+    red = RGB(255, 0, 0)
+    timeline = render(Flash(color=red, duration=2, times=1))
+    smoothed = smooth(timeline, transition=0.5, fps=4)
+
+    assert smoothed.duration == 2
+    assert [(f.t, f.brightness) for f in smoothed.frames] == [
+        (0.0, 50),
+        (0.25, 100),
+        (1.0, 50),
+        (1.25, 0),
+    ]
+    assert all(f.color == red for f in smoothed.frames)
+
+
+def test_smooth_never_runs_a_ramp_past_its_frame() -> None:
+    timeline = render(Flash(color=RGB(0, 0, 255), duration=0.4, times=2))
+    smoothed = smooth(timeline, transition=1.0, fps=20)
+    # Each 0.1 s frame gets a 0.1 s ramp, so every frame's value is still reached in time.
+    reached = [f for f in smoothed.frames if f.brightness in (0, 100)]
+    assert [round(f.t, 3) for f in reached] == [0.05, 0.15, 0.25, 0.35]
+
+
+def test_smooth_blends_colors() -> None:
+    timeline = Timeline([Frame(0, RGB(0, 0, 0), 100), Frame(1, RGB(200, 100, 0), 100)], 2)
+    smoothed = smooth(timeline, transition=0.5, fps=4)
+    assert [f.color for f in smoothed.frames[2:]] == [RGB(100, 50, 0), RGB(200, 100, 0)]
+
+
+def test_smooth_disabled() -> None:
+    timeline = render(Flash(color=RGB(0, 0, 255), duration=1))
+    assert smooth(timeline, transition=0) is timeline
