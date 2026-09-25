@@ -107,7 +107,9 @@ def discover(
         return
     for d in found:
         details = " ".join(f"{k}={v}" for k, v in sorted(d.details.items()))
-        typer.echo(f"{d.driver}\t{d.name}\t{d.host}:{d.port}\t{details}".rstrip())
+        # USB devices have no port.
+        address = f"{d.host}:{d.port}" if d.port else d.host
+        typer.echo(f"{d.driver}\t{d.name}\t{address}\t{details}".rstrip())
 
 
 @app.command()

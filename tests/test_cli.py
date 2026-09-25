@@ -6,6 +6,7 @@ from typer.testing import CliRunner
 from ambient.cli import app
 from ambient.config import load_config
 from ambient.drivers.base import DiscoveredDevice, DriverError
+from ambient.drivers.logitech_g102 import LogitechG102Driver
 from ambient.drivers.nanoleaf import NanoleafDriver
 
 runner = CliRunner()
@@ -114,6 +115,15 @@ def test_discover(fake_nanoleaf: list[DiscoveredDevice]) -> None:
     result = runner.invoke(app, ["discover", "nanoleaf"])
     assert result.exit_code == 0, result.output
     assert result.output == "nanoleaf\tLines 2F4C\t10.0.0.2:16021\tmd=NL59\n"
+
+
+def test_discover_usb_device_has_no_port(
+    fake_nanoleaf: list[DiscoveredDevice], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mouse = DiscoveredDevice("logitech_g102", "G102", "usb", 0, {"product_id": "0xc092"})
+    monkeypatch.setattr(LogitechG102Driver, "discover", classmethod(lambda cls, timeout: [mouse]))
+    result = runner.invoke(app, ["discover", "logitech_g102"])
+    assert result.output == "logitech_g102\tG102\tusb\tproduct_id=0xc092\n"
 
 
 def test_discover_nothing(fake_nanoleaf: list[DiscoveredDevice]) -> None:
