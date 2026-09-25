@@ -236,6 +236,25 @@ def test_restore_a_state_persisted_by_an_interrupted_effect() -> None:
     assert device.color is None
 
 
+@pytest.mark.parametrize("baseline", [None, Baseline(color=RGB(255, 255, 255))])
+def test_snapshot_undoes_host_mode_left_by_an_interrupted_effect(
+    baseline: Baseline | None,
+) -> None:
+    # The engine's baseline expired, so the mouse is found as the killed worker left it.
+    device = FakeG102(mode=2)
+    device.sw_control = SW_ON
+    device.color = (255, 0, 0)
+    driver = make_driver(device, baseline=baseline)
+
+    state = driver.snapshot()
+    driver.play(Flash(color=RGB(0, 255, 0), duration=1))
+    driver.restore(state)
+
+    assert state == {"sw_control": "0000", "mode": 1, "profile": "0001", "dpi_index": 3}
+    assert (device.mode, device.sw_control) == (1, b"\x00\x00")
+    assert device.color is None
+
+
 @pytest.mark.parametrize(
     "state",
     [

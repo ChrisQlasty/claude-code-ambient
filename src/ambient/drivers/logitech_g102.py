@@ -11,6 +11,8 @@ The mouse can't report its current lighting, so restoring depends on who was dri
   and re-selecting the active onboard profile brings its lighting back exactly. That also resets
   the DPI step, so the step is saved and restored too.
 - Host mode (G HUB in control) or no onboard profiles: the configured ``baseline`` color is set.
+- Host mode with this driver's own software-control flags (an effect was killed midway): it's
+  switched back to onboard mode first, then treated as onboard.
 """
 
 import ctypes
@@ -278,9 +280,20 @@ class LogitechG102Driver(Driver):
     def snapshot(self) -> DeviceState:
         hidpp = self._connected()
         sw_control = hidpp.request(self._rgb, RGB_SW_CONTROL, bytes([SW_CONTROL_GET]))[1:3]
+        # Our own flags mean an effect was cut short (the worker was killed) and its baseline
+        # has expired. Reading that back as the "previous" state would keep the mouse in host
+        # mode for good, so undo it and snapshot what the mouse falls back to instead.
+        leftover = sw_control == SW_CONTROL_ON
+        if leftover:
+            log.warning("%s: undoing host mode left by an interrupted effect", self.device_id)
+            sw_control = bytes(len(SW_CONTROL_ON))
         state: DeviceState = {"sw_control": sw_control.hex(), "mode": None}
         if self._profiles is not None:
-            state["mode"] = mode = hidpp.request(self._profiles, PROFILES_GET_MODE)[0]
+            mode = hidpp.request(self._profiles, PROFILES_GET_MODE)[0]
+            if leftover and mode == MODE_HOST:
+                hidpp.request(self._profiles, PROFILES_SET_MODE, bytes([MODE_ONBOARD]))
+                mode = MODE_ONBOARD
+            state["mode"] = mode
             if mode == MODE_ONBOARD:
                 profile = hidpp.request(self._profiles, PROFILES_GET_CURRENT)[:2]
                 dpi = hidpp.request(self._profiles, PROFILES_GET_DPI_INDEX)[0]
