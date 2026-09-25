@@ -17,8 +17,7 @@ description: Git branch/commit naming, commit and PR behaviour rules, and the PR
 
 ## Behaviour
 
-- **Never commit to `main`.** Start each task on a new branch named as above. `main` is protected on GitHub and only
-  accepts changes through a pull request.
+- **Never commit to `main`.** Start each task on a new branch named as above.
 - **Local commits on a feature branch are fine**, in small logical steps, each passing all checks. Don't amend or
   rewrite commits that have already been pushed.
 - **Never push, open a PR, merge, or delete branches unless explicitly asked** in the current conversation.
@@ -40,3 +39,5 @@ description: Git branch/commit naming, commit and PR behaviour rules, and the PR
   ## Testing
   <Commands run and manual checks, including any hardware tested.>
   ```
+
+- At the end of a task development, report what was committed (branch and commit list) and what was left uncommitted.

@@ -46,16 +46,8 @@ All four checks (pytest, ruff check, ruff format, mypy) must pass before any com
 
 ## Code style
 
-- Python 3.12+, fully type-annotated (mypy strict). Formatting and lint rules live in `pyproject.toml` (`[tool.ruff]`).
-- A PostToolUse hook (`.claude/hooks/ruff.sh`) runs `ruff format` and `ruff check --fix` on every edited `.py` file.
-  Fix any lint errors it reports instead of working around them.
+- Python 3.12+, fully type-annotated (mypy strict).
+- Fix any lint errors obtained from PostToolUse hook instead of working around them.
 - Keep modules small and dependency-light. Add a dependency only when the plan calls for it or after asking.
 - Comments explain *why*, not *what*. Match the density of surrounding code.
 - Every new behaviour gets a test. Use the `console` driver or injected `sleep`/`clock` instead of real time or hardware.
-
-## Git and pull requests
-
-Branch/commit naming, commit and PR behaviour rules, and the PR body template live in the `git-pr` skill
-(`.claude/skills/git-pr/SKILL.md`). Load it before creating branches, commits, or pull requests in this repo.
-`main` is protected on GitHub: it only accepts changes via pull request.
-- At the end of a task, report what was committed (branch and commit list) and what was left uncommitted.
