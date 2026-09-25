@@ -8,6 +8,7 @@ license-files = ["LICENSE"]
 authors = [{ name = "Krzysztof Czuszynski" }]
 requires-python = ">=3.12"
 dependencies = [
+    "hidapi>=0.15.0",
     "httpx>=0.28.1",
     "pydantic>=2.7",
     "pyyaml>=6.0",
@@ -22,6 +23,7 @@ ambient = "ambient.main:main"
 [project.entry-points."ambient.drivers"]
 console = "ambient.drivers.console:ConsoleDriver"
 nanoleaf = "ambient.drivers.nanoleaf:NanoleafDriver"
+logitech_g102 = "ambient.drivers.logitech_g102:LogitechG102Driver"
 
 [dependency-groups]
 dev = [
@@ -50,6 +52,11 @@ python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
 files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+# hidapi ships no type information.
+module = ["hid"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
