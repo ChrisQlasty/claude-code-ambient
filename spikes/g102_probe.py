@@ -1,9 +1,17 @@
 """Probe a USB Logitech G102/G203 LIGHTSYNC over HID++ 2.0.
 
     uv run python spikes/g102_probe.py            # read-only: features, LED clusters, profiles
-    uv run python spikes/g102_probe.py --write    # also set colors, then try ways to restore
+    uv run python spikes/g102_probe.py --write    # also show red/green, then restore
 
-Throwaway exploration, not part of the package. Writes use the RAM-only persistence flag.
+Throwaway exploration, not part of the package. Nothing it writes is saved to flash.
+
+Findings on a G102 LIGHTSYNC (0xc092, HID++ 4.2), confirmed by eye:
+- No 0x8070. Lighting is 0x8071 (RGB Effects), 0x8081 (per-LED) and 0x8100 (onboard profiles).
+- hidapi opens exclusively on macOS by default, which fails while G HUB's agent runs.
+- In onboard mode every lighting write is accepted but ignored, even with software control on.
+- The 0x8071 fixed effect is ignored even in host mode (the LEDs just go dark).
+- Host mode + 0x8071 software control [3, 7] + 0x8081 LEDs 1-3 + frame end works.
+- Restoring software control, onboard mode and the current profile brings the lighting back.
 """
 
 import subprocess
@@ -74,27 +82,33 @@ def main(write: bool) -> None:
         transport.close()
 
 
-def set_color(hidpp: g.Hidpp, rgb: int, index: int, r: int, gr: int, b: int) -> None:
-    params = bytes([0, index, r, gr, b]).ljust(12, b"\0") + bytes([0])  # persist: RAM only
-    hidpp.request(rgb, 1, params)
+def show(hidpp: g.Hidpp, leds: int, r: int, gr: int, b: int) -> None:
+    zones = b"".join(bytes([led, r, gr, b]) for led in (1, 2, 3)) + b"\xff"
+    hidpp.request(leds, 1, zones)
+    hidpp.request(leds, 7)
 
 
 def try_write(hidpp: g.Hidpp, rgb: int, ob: int, profile: bytes) -> None:
-    fixed = next(e for e in range(16) if u16(hidpp.request(rgb, 0, bytes([0, e, 0]))[2:]) == 0x0001)
+    leds = hidpp.feature_index(0x8081)
+    assert leds is not None
+    mode = hidpp.request(ob, 2)[0]
+    sw_control = hidpp.request(rgb, 5, b"\x00")[1:3]
     try:
-        for color in ((255, 0, 0), (0, 255, 0), (0, 0, 0)):
-            set_color(hidpp, rgb, fixed, *color)
-            print("set", color)
-            time.sleep(1.5)
+        hidpp.request(ob, 1, b"\x02")
+        hidpp.request(rgb, 5, b"\x01\x03\x07")
+        for color in ((255, 0, 0), (0, 255, 0)):
+            show(hidpp, leds, *color)
+            print("showing", color)
+            time.sleep(3)
         t = time.monotonic()
         for i in range(20):
-            set_color(hidpp, rgb, fixed, 0, 0, 255 if i % 2 else 0)
-        print(f"20 writes took {(time.monotonic() - t) * 1000:.0f} ms")
-        set_color(hidpp, rgb, fixed, 255, 0, 255)
-        time.sleep(1.5)
+            show(hidpp, leds, 0, 0, 255 if i % 2 else 0)
+        print(f"20 frames took {(time.monotonic() - t) * 1000:.0f} ms")
     finally:
+        hidpp.request(rgb, 5, b"\x01" + sw_control)
+        hidpp.request(ob, 1, bytes([mode]))
         hidpp.request(ob, 3, profile)
-        print("re-selected profile", profile.hex(), "- did the original lighting come back?")
+        print("restored mode", mode, "and profile", profile.hex())
 
 
 def is_ghub_running() -> bool:

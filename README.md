@@ -47,10 +47,12 @@ uv run ambient discover logitech_g102
 uv run ambient test logitech_g102 flash '#00ff00' --duration 2 --times 3
 ```
 
-Effects are never saved to the mouse's memory. The mouse can't report its current color, so afterwards:
+The mouse ignores lighting changes while it runs its onboard profile, so during an effect it is switched to software
+control, the way G HUB and OpenRGB drive it. Nothing is saved to the mouse's memory. The mouse can't report its
+current color, so afterwards:
 
-- In onboard memory mode (the default without G HUB), the lighting and DPI step of the active onboard profile come back
-  exactly.
+- In onboard memory mode (the default without G HUB), it is switched back and the lighting and DPI step of the active
+  onboard profile come back exactly.
 - When G HUB controls the mouse, it is set to the `baseline` color from your config. Without a `baseline`, the effect is
   skipped with an error in the log.
 
