@@ -36,7 +36,7 @@ def main(write: bool) -> None:
         print(f"hid: pid=0x{d['product_id']:04x} usage={d['usage_page']:#06x}/{d['usage']:#04x}")
     if not found:
         sys.exit("no G102 found")
-    transport = g.HidapiTransport(found[0]["path"])
+    transport = g.HidapiTransport(found[0]["path"], report_size=g.LONG_SIZE, device="mouse")
     hidpp = g.Hidpp(transport, timeout=1.0, clock=time.monotonic)
     try:
         ping = hidpp.request(0, 1, bytes([0, 0, 0x5A]))
