@@ -256,7 +256,7 @@ def test_restore_a_state_persisted_by_an_interrupted_effect() -> None:
     # A new process restores the engine's saved baseline while the custom effect is still on.
     device = FakeKeyboard(effect=CUSTOM_EFFECT)
     marker_path().parent.mkdir(parents=True)
-    marker_path().write_text(json.dumps({"profile": 0, "effect": STOCK}))
+    marker_path().write_text(json.dumps({"0": STOCK}))
 
     make_driver(device).restore({"profile": 0, "effect": STOCK})
 
@@ -271,7 +271,7 @@ def test_snapshot_undoes_the_custom_effect_left_by_an_interrupted_effect() -> No
     driver.snapshot()
     driver.play(Flash(color=RGB(255, 0, 0), duration=1))
     assert device.effect == CUSTOM_EFFECT
-    assert json.loads(marker_path().read_text()) == {"profile": 0, "effect": STOCK}
+    assert json.loads(marker_path().read_text()) == {"0": STOCK}
 
     fresh = make_driver(device)
     state = fresh.snapshot()
@@ -284,7 +284,7 @@ def test_snapshot_undoes_the_custom_effect_left_by_an_interrupted_effect() -> No
 def test_marker_for_the_other_profile_is_kept() -> None:
     device = FakeKeyboard(effect=CUSTOM_EFFECT)
     marker_path().parent.mkdir(parents=True)
-    marker_path().write_text(json.dumps({"profile": 1, "effect": STOCK}))
+    marker_path().write_text(json.dumps({"1": STOCK}))
 
     state = make_driver(device).snapshot()
 
@@ -292,9 +292,33 @@ def test_marker_for_the_other_profile_is_kept() -> None:
     assert marker_path().exists()
 
 
-def test_unreadable_marker_is_removed() -> None:
+def test_effect_on_one_profile_keeps_the_other_profiles_marker() -> None:
+    # A worker killed on the Mac profile, its baseline expired, then the user switched to Win.
+    device = FakeKeyboard(effect=CUSTOM_EFFECT)
+    device.profile = 1
+    device.states[1][0] = 7
     marker_path().parent.mkdir(parents=True)
-    marker_path().write_text("{")
+    marker_path().write_text(json.dumps({"0": STOCK}))
+
+    driver = make_driver(device)
+    state = driver.snapshot()
+    driver.play(Flash(color=RGB(0, 0, 255), duration=1))
+    assert json.loads(marker_path().read_text()) == {"0": STOCK, "1": 7}
+    driver.restore(state)
+
+    assert device.states[1][0] == 7
+    assert json.loads(marker_path().read_text()) == {"0": STOCK}
+
+    device.profile = 0
+    make_driver(device).snapshot()
+    assert device.states[0][0] == STOCK
+    assert not marker_path().exists()
+
+
+@pytest.mark.parametrize("content", ["{", "[1]", '{"profile": 0, "effect": 19}'])
+def test_unreadable_marker_is_removed(content: str) -> None:
+    marker_path().parent.mkdir(parents=True)
+    marker_path().write_text(content)
     state = make_driver(FakeKeyboard()).snapshot()
     assert state == {"profile": 0, "effect": STOCK}
     assert not marker_path().exists()

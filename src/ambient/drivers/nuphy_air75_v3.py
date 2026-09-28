@@ -10,9 +10,10 @@ ever written: whole-state writes rotate the stored color's hue on some firmware,
 writes rescale it. If the keyboard was already in the custom effect, nothing is written to flash
 and its key colors are repainted afterwards. The side lights are never touched.
 
-A marker file records the original effect while the custom effect is active, so an effect cut
-short (the worker was killed) is undone by the next snapshot even after the engine's baseline
-has expired, instead of the keyboard staying dark after its next power cycle.
+A marker file records each profile's original effect while it's in the custom effect, so an
+effect cut short (the worker was killed) is undone by the next snapshot on that profile even
+after the engine's baseline has expired, instead of the keyboard staying dark after its next
+power cycle.
 """
 
 import json
@@ -203,15 +204,15 @@ class NuphyAir75V3Driver(Driver):
 
     def snapshot(self) -> DeviceState:
         effect = self._read_effect(self._profile)
-        marker = self._read_marker()
         # A marker for the other Mac/Win profile waits until that profile is active again.
-        if marker is not None and marker["profile"] == self._profile:
+        original = self._read_markers().get(self._profile)
+        if original is not None:
             if effect == CUSTOM_EFFECT:
                 log.warning(
                     "%s: undoing the custom effect left by an interrupted effect", self.device_id
                 )
-                effect = self._write_effect(self._profile, marker["effect"])
-            self._marker_path().unlink(missing_ok=True)
+                effect = self._write_effect(self._profile, original)
+            self._clear_marker(self._profile)
         state: DeviceState = {"profile": self._profile, "effect": effect}
         if effect == CUSTOM_EFFECT:
             # Already showing the user's own per-key colors: keep the effect, repaint them after.
@@ -245,10 +246,11 @@ class NuphyAir75V3Driver(Driver):
         if self._original_effect is not None and profile != self._profile:
             # A baseline reused from another profile doesn't cover the one play() switched.
             self._set_effect(self._profile, self._original_effect)
+            self._clear_marker(self._profile)
         if colors is not None:
             self._paint(colors)
         self._set_effect(profile, effect)
-        self._marker_path().unlink(missing_ok=True)
+        self._clear_marker(profile)
         self._original_effect = None
         self._last = None
 
@@ -274,9 +276,9 @@ class NuphyAir75V3Driver(Driver):
         effect = self._read_effect(self._profile)
         if effect != CUSTOM_EFFECT:
             # Written before the effect changes, so a killed worker can always be undone.
-            self._write_marker(effect)
+            self._write_marker(self._profile, effect)
             if self._write_effect(self._profile, CUSTOM_EFFECT) != CUSTOM_EFFECT:
-                self._marker_path().unlink(missing_ok=True)
+                self._clear_marker(self._profile)
                 raise DriverError(
                     f"{self.device_id}: the keyboard didn't switch to its custom effect; update "
                     "its firmware in NuPhyIO (1.0.16.6 or later) and check the lighting is on"
@@ -325,21 +327,34 @@ class NuphyAir75V3Driver(Driver):
         safe = re.sub(r"[^A-Za-z0-9_.-]", "_", self.device_id)
         return paths.cache_dir() / "nuphy" / f"{safe}.json"
 
-    def _write_marker(self, effect: int) -> None:
-        path = self._marker_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"profile": self._profile, "effect": effect}))
+    def _write_marker(self, profile: int, effect: int) -> None:
+        # One entry per profile: each can be left in the custom effect by a different worker.
+        self._save_markers({**self._read_markers(), profile: effect})
 
-    def _read_marker(self) -> dict[str, int] | None:
+    def _clear_marker(self, profile: int) -> None:
+        markers = self._read_markers()
+        if markers.pop(profile, None) is not None:
+            self._save_markers(markers)
+
+    def _save_markers(self, markers: dict[int, int]) -> None:
+        path = self._marker_path()
+        if not markers:
+            path.unlink(missing_ok=True)
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({str(p): e for p, e in markers.items()}))
+
+    def _read_markers(self) -> dict[int, int]:
+        """The original effect of each profile left in the custom effect, by profile."""
         try:
             data = json.loads(self._marker_path().read_text())
-            return {"profile": int(data["profile"]), "effect": int(data["effect"])}
+            return {int(p): int(e) for p, e in data.items()}
         except FileNotFoundError:
-            return None
-        except (OSError, ValueError, KeyError, TypeError):
+            return {}
+        except (OSError, ValueError, AttributeError, TypeError):
             log.warning("%s: removing unreadable marker %s", self.device_id, self._marker_path())
             self._marker_path().unlink(missing_ok=True)
-            return None
+            return {}
 
     def _connected(self) -> S4:
         if self._s4 is None:
