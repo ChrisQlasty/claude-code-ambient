@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from ambient.drivers import logitech_g102
+from ambient.drivers import logitech_g102, nuphy_air75_v3
 
 
 @pytest.fixture(autouse=True)
@@ -15,5 +15,6 @@ def isolated_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def no_usb_devices(monkeypatch: pytest.MonkeyPatch) -> None:
-    # USB discovery and opening go through this; tests must never see a real mouse.
+    # USB discovery and opening go through these; tests must never see a real device.
     monkeypatch.setattr(logitech_g102, "_enumerate", lambda product_id: [])
+    monkeypatch.setattr(nuphy_air75_v3, "_enumerate", lambda product_id: [])

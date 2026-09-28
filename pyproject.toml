@@ -24,6 +24,7 @@ ambient = "ambient.main:main"
 console = "ambient.drivers.console:ConsoleDriver"
 nanoleaf = "ambient.drivers.nanoleaf:NanoleafDriver"
 logitech_g102 = "ambient.drivers.logitech_g102:LogitechG102Driver"
+nuphy_air75_v3 = "ambient.drivers.nuphy_air75_v3:NuphyAir75V3Driver"
 
 [dependency-groups]
 dev = [

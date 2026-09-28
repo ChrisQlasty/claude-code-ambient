@@ -15,18 +15,15 @@ The mouse can't report its current lighting, so restoring depends on who was dri
   switched back to onboard mode first, then treated as onboard.
 """
 
-import ctypes
 import logging
-import sys
-import weakref
 from collections.abc import Callable
-from types import ModuleType
-from typing import Any, ClassVar, Protocol
+from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ambient.config import DeviceConfig
 from ambient.drivers.base import Capability, DeviceState, DiscoveredDevice, Driver, DriverError
+from ambient.drivers.hid import HidapiTransport, HidTransport, import_hid
 from ambient.effects import RGB, AnyEffect, Frame, Timeline, render, smooth
 
 log = logging.getLogger(__name__)
@@ -82,16 +79,6 @@ _ERRORS = {
 }
 
 
-class HidTransport(Protocol):
-    def write(self, data: bytes) -> None: ...
-
-    def read(self, timeout: float) -> bytes:
-        """The next input report, or ``b""`` if none arrives within ``timeout`` seconds."""
-        ...
-
-    def close(self) -> None: ...
-
-
 class HidppError(DriverError):
     def __init__(self, message: str, code: int) -> None:
         super().__init__(message)
@@ -136,67 +123,8 @@ class Hidpp:
         return index if index or feature == FEATURE_ROOT else None
 
 
-class HidapiTransport:
-    def __init__(self, path: bytes) -> None:
-        hid = _import_hid()
-        _allow_shared_open(hid.__file__)
-        self._device = hid.device()
-        try:
-            self._device.open_path(path)
-        except OSError as exc:
-            raise DriverError(f"can't open the mouse ({exc})") from exc
-
-    def write(self, data: bytes) -> None:
-        if self._device.write(data) < 0:
-            raise DriverError("HID write failed; was the mouse unplugged?")
-
-    def read(self, timeout: float) -> bytes:
-        return bytes(self._device.read(LONG_SIZE, max(1, round(timeout * 1000))))
-
-    def close(self) -> None:
-        self._device.close()
-
-
-def _allow_shared_open(library: str) -> None:
-    """On macOS, stop hidapi from opening devices exclusively.
-
-    The exclusive default fails whenever G HUB (or macOS itself) already has the mouse open.
-    The Python binding doesn't wrap the setting, so it's called through ctypes. ``hid_init``
-    resets it, which has already run by the time a device path was enumerated.
-    """
-    if sys.platform != "darwin":
-        return
-    try:
-        ctypes.CDLL(library).hid_darwin_set_open_exclusive(0)
-    except (OSError, AttributeError):
-        log.debug("hid_darwin_set_open_exclusive unavailable; opening exclusively")
-
-
-def _import_hid() -> Any:  # hidapi ships no type information
-    try:
-        import hid
-    except ImportError as exc:
-        raise DriverError(f"hidapi isn't available: {exc}") from exc
-    _skip_exit_cleanup(hid)
-    return hid
-
-
-def _skip_exit_cleanup(module: ModuleType) -> None:
-    """Drop the ``hid_exit`` call the hidapi module registers for interpreter exit.
-
-    On macOS, ``hid_init`` attaches to the run loop of whichever thread first used hidapi (an
-    engine worker thread), and ``hid_exit`` on the main thread at exit then aborts the process
-    while detaching from that thread's run loop. The OS releases the devices on exit anyway.
-    """
-    registry: dict[weakref.finalize[Any, Any], Any] = getattr(weakref.finalize, "_registry", {})
-    for finalizer in list(registry):
-        info = finalizer.peek()
-        if info is not None and info[0] is module:
-            finalizer.detach()
-
-
 def _enumerate(product_id: int | None) -> list[dict[str, Any]]:
-    hid = _import_hid()
+    hid = import_hid()
     return [
         d
         for d in hid.enumerate(VENDOR_ID, product_id or 0)
@@ -209,7 +137,7 @@ def open_hidapi(options: "G102Options") -> HidTransport:
     found = _enumerate(options.product_id)
     if not found:
         raise DriverError("no Logitech G102/G203 LIGHTSYNC found on USB")
-    return HidapiTransport(found[0]["path"])
+    return HidapiTransport(found[0]["path"], report_size=LONG_SIZE, device="mouse")
 
 
 class G102Options(BaseModel):
