@@ -3,8 +3,8 @@
 Turn [Claude Code](https://claude.com/claude-code) hook events into ambient light effects on your devices.
 For example, your lights blink green when Claude finishes, then return to exactly what they showed before.
 
-> **Status:** early development. The `console` test driver, the Nanoleaf and Logitech G102 drivers and the Claude
-> Code hook integration (`UserPromptSubmit` and `Stop`) work. More devices (NuPhy Air75 V3, Philips Hue) and the
+> **Status:** early development. The `console` test driver, the Nanoleaf, Logitech G102 and NuPhy Air75 V3 drivers
+> and the Claude Code hook integration (`UserPromptSubmit` and `Stop`) work. More devices (Philips Hue) and the
 > `Notification` event are still to come.
 
 ## Requirements
@@ -62,6 +62,31 @@ devices:
     driver: logitech_g102
     baseline: { color: "#ffffff", brightness: 60 }   # only used when G HUB controls the mouse
     transition: 0.25   # seconds to fade into each frame, like Nanoleaf's built-in fading; 0 = sharp
+```
+
+### NuPhy Air75 V3
+
+Connect the keyboard with its USB cable. Its lighting can't be controlled over Bluetooth or the 2.4 GHz dongle: there
+the keyboard isn't found, and the effect is skipped with an error in the log. It needs firmware 1.0.16.6 or later
+(update it at [nuphy.io](https://nuphy.io)); older firmware has no per-key custom lighting. No macOS permission is
+needed. Close NuPhyIO while effects play, since both talk to the same interface.
+
+```sh
+uv run ambient discover nuphy_air75_v3
+uv run ambient test nuphy_air75_v3 flash '#00ff00' --duration 2 --times 3
+```
+
+During an effect the keyboard is switched to its custom lighting effect, and the keys are painted in RAM frame by
+frame. Afterwards the previous lighting effect is selected again; the side lights and brightness are never changed.
+The keyboard saves its lighting effect to its own memory, so each effect makes two small writes to it (switching in
+and back). If the custom effect was already active, nothing is written and its key colors are repainted instead.
+The keys follow the keyboard's own brightness setting.
+
+```yaml
+devices:
+  keyboard:
+    driver: nuphy_air75_v3
+    transition: 0.25   # seconds to fade into each frame; 0 = sharp
 ```
 
 ## Claude Code hooks

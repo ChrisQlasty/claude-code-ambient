@@ -17,6 +17,8 @@ devices:
   #   baseline:                # restored only when G HUB controls the mouse
   #     color: "#ffffff"
   #     brightness: 60
+  # keyboard:
+  #   driver: nuphy_air75_v3   # USB cable only; firmware 1.0.16.6+
 
 events:
   UserPromptSubmit:

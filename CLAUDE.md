@@ -28,8 +28,8 @@ All four checks (pytest, ruff check, ruff format, mypy) must pass before any com
 - `src/ambient/events.py`: hook events handled (`UserPromptSubmit`, `Stop`). `log.py`: file logging.
 - `src/ambient/config.py`: pydantic models for `~/.config/ambient/config.yaml`, YAML loading, and JSON Schema export.
 - `src/ambient/effects.py`: effect models (`solid`/`flash`/`pulse`) and the frame/timeline generator.
-- `src/ambient/drivers/`: `base.py` (the `Driver` ABC and `Capability`) and one module per device. Drivers are
-  registered through the `ambient.drivers` entry point group in `pyproject.toml`.
+- `src/ambient/drivers/`: `base.py` (the `Driver` ABC and `Capability`), `hid.py` (hidapi plumbing for USB drivers)
+  and one module per device. Drivers are registered through the `ambient.drivers` entry point group in `pyproject.toml`.
 - `src/ambient/paths.py`: XDG-style paths on every OS, overridable with `XDG_*_HOME` and `AMBIENT_CONFIG`.
 - `tests/`: pytest. Tests must never touch real devices, the real config, or `~/.claude`.
 - `spikes/`: throwaway hardware exploration scripts. Not imported by the package.
@@ -43,6 +43,8 @@ All four checks (pytest, ruff check, ruff format, mypy) must pass before any com
 - Never write to `~/.claude/settings.json` or the user's real config outside an explicit `install-hooks`/`pair`-style
   command, and always back the file up first.
 - Hardware-writing code must not persist changes to device memory or EEPROM (for example, no VIA `id_custom_save`).
+  One documented exception: the NuPhy Air75 V3 saves every lighting-effect switch to flash, so its driver may write
+  only the effect field, once to enter the custom effect and once to switch back, and never when nothing changed.
 
 ## Code style
 
