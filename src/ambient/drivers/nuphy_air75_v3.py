@@ -191,6 +191,9 @@ class NuphyAir75V3Driver(Driver):
             self._transport = open_hidapi(self.options)
         self._s4 = S4(self._transport, timeout=self.options.timeout, clock=self._clock)
         self._s4.identify()
+        # Read here rather than in snapshot(): a reused baseline skips it, and play() must still
+        # switch the profile that's active now.
+        self._profile = self._s4.request(CMD_GEOMETRY, 8)[0]
 
     def close(self) -> None:
         if self._transport is not None:
@@ -199,9 +202,7 @@ class NuphyAir75V3Driver(Driver):
         self._s4 = None
 
     def snapshot(self) -> DeviceState:
-        s4 = self._connected()
-        self._profile = s4.request(CMD_GEOMETRY, 8)[0]
-        effect = self._read_effect()
+        effect = self._read_effect(self._profile)
         marker = self._read_marker()
         # A marker for the other Mac/Win profile waits until that profile is active again.
         if marker is not None and marker["profile"] == self._profile:
@@ -209,7 +210,7 @@ class NuphyAir75V3Driver(Driver):
                 log.warning(
                     "%s: undoing the custom effect left by an interrupted effect", self.device_id
                 )
-                effect = self._write_effect(marker["effect"])
+                effect = self._write_effect(self._profile, marker["effect"])
             self._marker_path().unlink(missing_ok=True)
         state: DeviceState = {"profile": self._profile, "effect": effect}
         if effect == CUSTOM_EFFECT:
@@ -241,12 +242,12 @@ class NuphyAir75V3Driver(Driver):
         if colors is not None and len(colors) != KEY_LEDS * 3:
             raise DriverError(f"{self.device_id}: invalid saved state: {len(colors)} color bytes")
         self._connected()
-        self._profile = profile
+        if self._original_effect is not None and profile != self._profile:
+            # A baseline reused from another profile doesn't cover the one play() switched.
+            self._set_effect(self._profile, self._original_effect)
         if colors is not None:
             self._paint(colors)
-        # Writing the effect costs a flash write, so skip it when nothing changed.
-        if self._read_effect() != effect:
-            self._write_effect(effect)
+        self._set_effect(profile, effect)
         self._marker_path().unlink(missing_ok=True)
         self._original_effect = None
         self._last = None
@@ -270,11 +271,11 @@ class NuphyAir75V3Driver(Driver):
             self._last = color
 
     def _enter_custom_effect(self) -> None:
-        effect = self._read_effect()
+        effect = self._read_effect(self._profile)
         if effect != CUSTOM_EFFECT:
             # Written before the effect changes, so a killed worker can always be undone.
             self._write_marker(effect)
-            if self._write_effect(CUSTOM_EFFECT) != CUSTOM_EFFECT:
+            if self._write_effect(self._profile, CUSTOM_EFFECT) != CUSTOM_EFFECT:
                 self._marker_path().unlink(missing_ok=True)
                 raise DriverError(
                     f"{self.device_id}: the keyboard didn't switch to its custom effect; update "
@@ -282,20 +283,22 @@ class NuphyAir75V3Driver(Driver):
                 )
         self._original_effect = effect
 
-    def _read_effect(self) -> int:
-        return self._read_state()[EFFECT]
+    def _read_effect(self, profile: int) -> int:
+        return self._connected().request(CMD_GET_STATE, STATE_SIZE, handle=profile)[EFFECT]
 
-    def _read_state(self) -> bytes:
-        return self._connected().request(CMD_GET_STATE, STATE_SIZE, handle=self._profile)
+    def _set_effect(self, profile: int, effect: int) -> None:
+        # Writing the effect costs a flash write, so skip it when nothing changed.
+        if self._read_effect(profile) != effect:
+            self._write_effect(profile, effect)
 
-    def _write_effect(self, effect: int) -> int:
+    def _write_effect(self, profile: int, effect: int) -> int:
         """Set the main backlight's effect (a flash write) and return what the keyboard shows."""
         s4 = self._connected()
-        s4.request(CMD_SET_STATE, 1, address=EFFECT, payload=bytes([effect]), handle=self._profile)
+        s4.request(CMD_SET_STATE, 1, address=EFFECT, payload=bytes([effect]), handle=profile)
         current = effect
         for _ in range(SETTLE_READS):
             self._sleep(SETTLE)
-            current = self._read_effect()
+            current = self._read_effect(profile)
             if current == effect:
                 break
         return current

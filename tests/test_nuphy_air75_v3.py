@@ -214,6 +214,38 @@ def test_uses_the_active_mac_or_win_profile() -> None:
     assert device.flash_writes == [(0, CUSTOM_EFFECT), (0, 7)]
 
 
+def test_reused_baseline_plays_on_the_active_profile() -> None:
+    # A worker killed on the Win profile left its custom effect and baseline behind; the next
+    # one reuses that baseline, so snapshot() is skipped.
+    device = FakeKeyboard()
+    device.profile = 1
+    device.states[1][0] = CUSTOM_EFFECT
+    baseline = {"profile": 1, "effect": 7}
+
+    driver = make_driver(device)
+    driver.play(Flash(color=RGB(0, 0, 255), duration=1))
+    driver.restore(baseline)
+
+    assert device.states[0][0] == STOCK
+    assert device.states[1][0] == 7
+    assert device.flash_writes == [(0, 7)]
+
+
+def test_reused_baseline_from_the_other_profile_restores_both() -> None:
+    # A worker killed on the Mac profile, then the user switched to Win.
+    device = FakeKeyboard(effect=CUSTOM_EFFECT)
+    device.profile = 1
+    device.states[1][0] = 7
+
+    driver = make_driver(device)
+    driver.play(Flash(color=RGB(0, 0, 255), duration=1))
+    driver.restore({"profile": 0, "effect": STOCK})
+
+    assert device.states[0][0] == STOCK
+    assert device.states[1][0] == 7
+    assert device.flash_writes == [(0, CUSTOM_EFFECT), (0, 7), (0, STOCK)]
+
+
 def test_restore_from_a_new_process_skips_unneeded_writes() -> None:
     device = FakeKeyboard()
     make_driver(device).restore({"profile": 0, "effect": STOCK})
