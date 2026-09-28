@@ -211,7 +211,8 @@ class NuphyAir75V3Driver(Driver):
                 log.warning(
                     "%s: undoing the custom effect left by an interrupted effect", self.device_id
                 )
-                effect = self._write_effect(self._profile, original)
+                self._set_effect(self._profile, original)
+                effect = original
             self._clear_marker(self._profile)
         state: DeviceState = {"profile": self._profile, "effect": effect}
         if effect == CUSTOM_EFFECT:
@@ -274,7 +275,11 @@ class NuphyAir75V3Driver(Driver):
 
     def _enter_custom_effect(self) -> None:
         effect = self._read_effect(self._profile)
-        if effect != CUSTOM_EFFECT:
+        if effect == CUSTOM_EFFECT:
+            # Left by an effect whose failed restore is being retried (snapshot() was skipped
+            # for the reused baseline): undo it too, rather than treating it as the user's own.
+            effect = self._read_markers().get(self._profile, CUSTOM_EFFECT)
+        else:
             # Written before the effect changes, so a killed worker can always be undone.
             self._write_marker(self._profile, effect)
             if self._write_effect(self._profile, CUSTOM_EFFECT) != CUSTOM_EFFECT:
@@ -290,8 +295,12 @@ class NuphyAir75V3Driver(Driver):
 
     def _set_effect(self, profile: int, effect: int) -> None:
         # Writing the effect costs a flash write, so skip it when nothing changed.
-        if self._read_effect(profile) != effect:
-            self._write_effect(profile, effect)
+        if self._read_effect(profile) != effect and self._write_effect(profile, effect) != effect:
+            # Raised before the marker (and the engine's baseline) is cleared, so the next run
+            # retries instead of leaving the profile in the custom effect for good.
+            raise DriverError(
+                f"{self.device_id}: the keyboard didn't switch back to effect {effect}"
+            )
 
     def _write_effect(self, profile: int, effect: int) -> int:
         """Set the main backlight's effect (a flash write) and return what the keyboard shows."""

@@ -40,6 +40,7 @@ class FakeKeyboard:
         self.replies: list[bytes] = []
         self.noise: list[bytes] = []
         self.silent = False
+        self.stuck = False  # state writes are acknowledged but never applied
         self.closed = False
 
     # --- HidTransport ---
@@ -100,7 +101,8 @@ class FakeKeyboard:
                 value = payload[0]
                 if address == 0 and value == CUSTOM_EFFECT and not self.custom:
                     value = 20
-                self.pending_state = (handle, address, bytes([value]) + payload[1:])
+                if not self.stuck:
+                    self.pending_state = (handle, address, bytes([value]) + payload[1:])
                 self.flash_writes.append((address, payload[0]))
                 return payload
             case 0xD8:
@@ -279,6 +281,54 @@ def test_snapshot_undoes_the_custom_effect_left_by_an_interrupted_effect() -> No
     assert state == {"profile": 0, "effect": STOCK}
     assert device.effect == STOCK
     assert not marker_path().exists()
+
+
+def test_restore_that_does_not_take_keeps_the_marker() -> None:
+    device = FakeKeyboard()
+    driver = make_driver(device)
+    state = driver.snapshot()
+    driver.play(Flash(color=RGB(255, 0, 0), duration=1))
+    device.stuck = True
+
+    with pytest.raises(DriverError, match="didn't switch back"):
+        driver.restore(state)
+
+    assert device.effect == CUSTOM_EFFECT
+    assert json.loads(marker_path().read_text()) == {"0": STOCK}
+
+
+def test_failed_restore_of_both_profiles_is_retried_with_the_baseline() -> None:
+    device = FakeKeyboard(effect=CUSTOM_EFFECT)
+    device.profile = 1
+    device.states[1][0] = 7
+    baseline = {"profile": 0, "effect": STOCK}
+    driver = make_driver(device)
+    driver.play(Flash(color=RGB(0, 0, 255), duration=1))
+    device.stuck = True
+    with pytest.raises(DriverError):
+        driver.restore(baseline)
+    device.stuck = False
+
+    # The engine kept the baseline, so the next worker skips snapshot() again.
+    retry = make_driver(device)
+    retry.play(Flash(color=RGB(0, 0, 255), duration=1))
+    retry.restore(baseline)
+
+    assert device.states[0][0] == STOCK
+    assert device.states[1][0] == 7
+    assert not marker_path().exists()
+
+
+def test_snapshot_undo_that_does_not_take_keeps_the_marker() -> None:
+    device = FakeKeyboard(effect=CUSTOM_EFFECT)
+    device.stuck = True
+    marker_path().parent.mkdir(parents=True)
+    marker_path().write_text(json.dumps({"0": STOCK}))
+
+    with pytest.raises(DriverError, match="didn't switch back"):
+        make_driver(device).snapshot()
+
+    assert json.loads(marker_path().read_text()) == {"0": STOCK}
 
 
 def test_marker_for_the_other_profile_is_kept() -> None:
