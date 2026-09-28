@@ -37,6 +37,15 @@ It backs up the previous file to `config.yaml.bak` and keeps its comments. After
 their previous scene or color, brightness, and on/off state. A dynamic scene started from another app (screen mirroring,
 rhythm, external control) can't be selected again by name, so it comes back as its last solid color.
 
+```yaml
+devices:
+  lines:
+    driver: nanoleaf
+    host: 192.168.1.50   # filled in by `pair`
+    port: 16021
+    token: "..."         # filled in by `pair`
+```
+
 ### Logitech G102 / G203 LIGHTSYNC
 
 Connect the mouse with its USB cable. No pairing or extra macOS permission is needed, and it works while G HUB is
@@ -66,10 +75,12 @@ devices:
 
 ### NuPhy Air75 V3
 
-Connect the keyboard with its USB cable. Its lighting can't be controlled over Bluetooth or the 2.4 GHz dongle: there
-the keyboard isn't found, and the effect is skipped with an error in the log. It needs firmware 1.0.16.6 or later
-(update it at [nuphy.io](https://nuphy.io)); older firmware has no per-key custom lighting. No macOS permission is
-needed. Close NuPhyIO while effects play, since both talk to the same interface.
+> **Requires the USB cable.** The keyboard only accepts lighting commands over USB. Over Bluetooth it can't be
+> controlled at all, and the 2.4 GHz dongle isn't supported (untested). While it isn't on the cable, its effects are
+> skipped with an error in the log; other devices still play.
+
+It needs firmware 1.0.16.6 or later (update it at [nuphy.io](https://nuphy.io)); older firmware has no per-key custom
+lighting. No macOS permission is needed. Close NuPhyIO while effects play, since both talk to the same interface.
 
 ```sh
 uv run ambient discover nuphy_air75_v3
