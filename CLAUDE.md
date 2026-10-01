@@ -21,7 +21,8 @@ All four checks (pytest, ruff check, ruff format, mypy) must pass before any com
 
 - `src/ambient/main.py`: console-script entry point. Routes `ambient fire` to `fire.py` without importing the typer app.
 - `src/ambient/cli.py`: typer app (`ambient`).
-- `src/ambient/fire.py`: hook entrypoint (stdlib-only). Reads stdin JSON and spawns `worker.py` detached.
+- `src/ambient/fire.py`: hook entrypoint (stdlib-only). Reads stdin JSON, sends it to the daemon's unix socket if one
+  listens, else spawns `worker.py` detached.
 - `src/ambient/worker.py`, `src/ambient/engine.py`: load config, then per device lock → snapshot or persisted
   baseline → play → restore.
 - `src/ambient/hooks_install.py`: merge/remove `ambient fire` hooks in Claude Code's `settings.json`.
@@ -30,6 +31,12 @@ All four checks (pytest, ruff check, ruff format, mypy) must pass before any com
 - `src/ambient/effects.py`: effect models (`solid`/`flash`/`pulse`) and the frame/timeline generator.
 - `src/ambient/drivers/`: `base.py` (the `Driver` ABC and `Capability`), `hid.py` (hidapi plumbing for USB drivers)
   and one module per device. Drivers are registered through the `ambient.drivers` entry point group in `pyproject.toml`.
+- `src/ambient/daemon/`: optional daemon. `server.py` (FastAPI REST API on loopback, static UI, `serve()`),
+  `listener.py` (unix socket for `fire`), `queue.py` (per-device effect queues over `engine.play_on_device`),
+  `control.py` (start/stop/status, launchd login item).
+- `src/ambient/pairing.py`: pairing shared by `ambient pair` and the API.
+- `web/`: Svelte + TS + Vite UI. `npm run build` writes `src/ambient/web_dist/`, which is committed; rebuild and
+  commit it with any `web/` change.
 - `src/ambient/paths.py`: XDG-style paths on every OS, overridable with `XDG_*_HOME` and `AMBIENT_CONFIG`.
 - `tests/`: pytest. Tests must never touch real devices, the real config, or `~/.claude`.
 - `spikes/`: throwaway hardware exploration scripts. Not imported by the package.

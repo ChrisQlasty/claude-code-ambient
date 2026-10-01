@@ -118,6 +118,25 @@ Each device is locked while an effect plays, so overlapping events queue up (for
 capturing each other's flashes. The device's state before the effect is saved to `~/.cache/ambient/baseline/` until it has
 been restored, so an interrupted effect is still undone by the next one.
 
+## Daemon and web UI
+
+```sh
+uv run ambient ui                        # start the daemon if needed and open the web UI
+uv run ambient daemon start|stop|status  # run it in the background; `daemon run` for the foreground
+uv run ambient daemon install-login-item # macOS: start it at every login (LaunchAgent)
+uv run ambient daemon uninstall-login-item
+```
+
+The daemon is optional. While it runs, `ambient fire` hands events to it over a unix socket
+(`~/.config/ambient/ambientd.sock`) instead of starting a worker; when it's stopped, hooks fall back to the worker as
+above, so nothing has to be reinstalled. It still opens each device per effect and takes the same per-device locks, so it
+never conflicts with `ambient test` or a worker.
+
+The web UI (<http://127.0.0.1:8765> by default, `--port` to change) edits the whole config: effects per event with a
+color picker and a **Preview** button, devices with discovery, pairing, options and baseline, plus hook install status and
+the log. Saving validates the config first, keeps your YAML comments, and copies the previous file to `config.yaml.bak`.
+The daemon listens on loopback only and refuses requests from other sites' pages.
+
 ## Configuration
 
 `ambient` reads `~/.config/ambient/config.yaml`. Set `AMBIENT_CONFIG` or pass `--config` to use a different file.
@@ -137,6 +156,16 @@ Each hook event maps to one or more effects on one or more devices:
 uv run pytest
 uv run ruff check . && uv run ruff format --check .
 uv run mypy
+```
+
+The web UI lives in `web/` (Svelte + TypeScript + Vite). Its build is committed in `src/ambient/web_dist/`, so only
+changing the UI needs Node:
+
+```sh
+cd web && npm ci
+npm run dev     # hot reload on :5173, proxying /api to a daemon on :8765 (`ambient daemon start`)
+npm run check   # type-check
+npm run build   # rebuild src/ambient/web_dist/; commit the result
 ```
 
 ## License
