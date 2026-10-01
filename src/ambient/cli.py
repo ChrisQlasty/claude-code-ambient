@@ -2,15 +2,15 @@
 
 import difflib
 import logging
-from collections import deque
 from pathlib import Path
 from typing import Annotated, Literal
 
 import typer
 from pydantic import TypeAdapter, ValidationError
 
-from ambient import engine, fire, hooks_install, log, paths
-from ambient.config import Config, ConfigError, DeviceConfig, load_config, update_device
+from ambient import engine, fire, hooks_install, log, pairing, paths
+from ambient.config import Config, ConfigError, DeviceConfig, load_config
+from ambient.daemon import control
 from ambient.drivers import UnknownDriverError, available_drivers, get_driver
 from ambient.drivers.base import Driver, DriverError
 from ambient.effects import AnyEffect, Effect
@@ -19,6 +19,8 @@ from ambient.events import HookEvent
 app = typer.Typer(no_args_is_help=True, help="Ambient light effects for Claude Code events.")
 config_app = typer.Typer(no_args_is_help=True, help="Inspect and validate the config file.")
 app.add_typer(config_app, name="config")
+daemon_app = typer.Typer(no_args_is_help=True, help="Run the background daemon (web UI + hooks).")
+app.add_typer(daemon_app, name="daemon")
 
 ConfigOption = Annotated[
     Path | None,
@@ -124,32 +126,12 @@ def pair(
 ) -> None:
     """Pair with a device and save its credentials to the config file."""
     path = config_path or paths.config_file()
-    existing = _load(config_path, required=False).devices.get(device)
-    driver_name = driver or (existing.driver if existing else None)
-    if driver_name is None:
-        raise _fail(f"{device!r} isn't configured; pass --driver (e.g. --driver nanoleaf)")
-    driver_cls = _driver_cls(driver_name)
-    if driver_cls.pair is Driver.pair:
-        raise _fail(f"the {driver_name} driver doesn't need pairing")
-    options = existing.options if existing and existing.driver == driver_name else {}
-    if host:
-        options["host"] = host
-    if "host" not in options:
-        options["host"] = _discover_one(driver_cls)
-
+    config = _load(config_path, required=False)
     try:
-        device_config = DeviceConfig.model_validate({"driver": driver_name, **options})
-        instance = driver_cls(device, device_config)
-        typer.echo(
-            f"Pairing with {options['host']}: {driver_cls.pairing_hint} "
-            f"(waiting up to {timeout:.0f} s)..."
+        backup = pairing.pair_device(
+            path, config, device, driver=driver, host=host, timeout=timeout, notify=typer.echo
         )
-        try:
-            fields = instance.pair(timeout)
-        finally:
-            instance.close()
-        backup = update_device(path, device, {"driver": driver_name, **fields})
-    except (DriverError, ConfigError) as exc:
+    except pairing.PairingError as exc:
         raise _fail(str(exc)) from exc
     typer.secho(f"paired {device!r}, saved to {path}", fg=typer.colors.GREEN)
     if backup:
@@ -161,20 +143,6 @@ def _driver_cls(name: str) -> type[Driver]:
         return get_driver(name)
     except UnknownDriverError as exc:
         raise _fail(str(exc)) from exc
-
-
-def _discover_one(driver_cls: type[Driver]) -> str:
-    typer.echo(f"No host given, discovering {driver_cls.name} devices...")
-    try:
-        found = driver_cls.discover(3.0)
-    except DriverError as exc:
-        raise _fail(str(exc)) from exc
-    if len(found) == 1:
-        return found[0].host
-    if not found:
-        raise _fail("no devices found; pass --host")
-    listing = ", ".join(f"{d.name} ({d.host})" for d in found)
-    raise _fail(f"several devices found, pass --host: {listing}")
 
 
 @app.command("fire")
@@ -257,14 +225,8 @@ def _apply_hooks_change(change: hooks_install.Change, dry_run: bool, *, done: st
 @app.command()
 def logs(lines: Annotated[int, typer.Option("--lines", "-n", min=1)] = 50) -> None:
     """Show the end of the log file."""
-    path = paths.log_file()
-    typer.echo(f"# {path}", err=True)
-    try:
-        with path.open(encoding="utf-8", errors="replace") as handle:
-            tail = deque(handle, maxlen=lines)
-    except FileNotFoundError:
-        return
-    typer.echo("".join(tail), nl=False)
+    typer.echo(f"# {paths.log_file()}", err=True)
+    typer.echo(log.tail(lines), nl=False)
 
 
 @config_app.command("path")
@@ -289,6 +251,91 @@ def config_validate(config_path: ConfigOption = None) -> None:
         f"ok: {len(config.devices)} device(s), {len(config.events)} event(s)",
         fg=typer.colors.GREEN,
     )
+
+
+PortOption = Annotated[int, typer.Option(help="Web UI port on 127.0.0.1.")]
+
+
+@daemon_app.command("run")
+def daemon_run(port: PortOption = control.DEFAULT_PORT) -> None:
+    """Run the daemon in the foreground (Ctrl-C to stop)."""
+    # Imported here: FastAPI and uvicorn would slow down every other command.
+    from ambient.daemon.listener import AlreadyRunningError
+    from ambient.daemon.server import serve
+
+    typer.echo(f"serving http://127.0.0.1:{port} (logs: {paths.log_file()})")
+    try:
+        serve(port=port)
+    except (AlreadyRunningError, OSError) as exc:
+        raise _fail(str(exc)) from exc
+
+
+@daemon_app.command("start")
+def daemon_start(port: PortOption = control.DEFAULT_PORT) -> None:
+    """Start the daemon in the background."""
+    info = _start_daemon(port)
+    typer.secho(f"daemon running (pid {info.pid}) at {info.url}", fg=typer.colors.GREEN)
+
+
+@daemon_app.command("stop")
+def daemon_stop() -> None:
+    """Stop the daemon. Hooks fall back to direct mode."""
+    try:
+        stopped = control.stop()
+    except control.DaemonError as exc:
+        raise _fail(str(exc)) from exc
+    typer.echo("daemon stopped" if stopped else "daemon isn't running")
+
+
+@daemon_app.command("status")
+def daemon_status() -> None:
+    """Show whether the daemon is running. Exits 1 if it isn't."""
+    info = control.running()
+    if info is None:
+        typer.echo("daemon isn't running (hooks use direct mode)")
+        raise typer.Exit(1)
+    socket = "ok" if info.socket_ok else "not responding"
+    typer.echo(f"daemon running (pid {info.pid}) at {info.url}, hook socket {socket}")
+
+
+@daemon_app.command("install-login-item")
+def daemon_install_login_item(port: PortOption = control.DEFAULT_PORT) -> None:
+    """Start the daemon now and at every login (macOS LaunchAgent)."""
+    if control.running():
+        control.stop()
+    try:
+        path = control.install_login_item(hooks_install.ambient_executable(), port)
+    except (control.DaemonError, hooks_install.HooksError) as exc:
+        raise _fail(str(exc)) from exc
+    typer.secho(f"installed {path}", fg=typer.colors.GREEN)
+
+
+@daemon_app.command("uninstall-login-item")
+def daemon_uninstall_login_item() -> None:
+    """Remove the LaunchAgent and stop the daemon it started."""
+    removed = control.uninstall_login_item()
+    typer.echo(f"removed {control.launch_agent_path()}" if removed else "no login item installed")
+
+
+@app.command()
+def ui(
+    port: PortOption = control.DEFAULT_PORT,
+    open_browser: Annotated[bool, typer.Option("--open/--no-open")] = True,
+) -> None:
+    """Open the web UI, starting the daemon if needed."""
+    import webbrowser
+
+    info = _start_daemon(port)
+    typer.echo(info.url)
+    if open_browser:
+        webbrowser.open(info.url)
+
+
+def _start_daemon(port: int) -> control.DaemonInfo:
+    try:
+        return control.start(port)
+    except control.DaemonError as exc:
+        raise _fail(str(exc)) from exc
 
 
 def _format_errors(exc: ValidationError) -> str:
