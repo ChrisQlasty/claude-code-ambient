@@ -8,11 +8,11 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from ambient import hooks_install, log
+from ambient import drivers, hooks_install, log
 from ambient.config import DeviceConfig, load_raw
 from ambient.daemon import server
 from ambient.daemon.queue import DeviceQueues
-from ambient.drivers.base import DiscoveredDevice
+from ambient.drivers.base import DiscoveredDevice, Driver
 from ambient.drivers.nanoleaf import NanoleafDriver
 from ambient.effects import AnyEffect
 
@@ -135,6 +135,22 @@ def test_preview_errors(client: TestClient, body: dict[str, Any], detail: str) -
     assert detail in response.json()["detail"]
 
 
+def test_preview_queues_nothing_when_a_device_is_bad(
+    client: TestClient, queues: DeviceQueues, player: Recorder
+) -> None:
+    response = client.post(
+        "/api/preview",
+        json={
+            "device": ["desk", "x"],
+            "effect": {"type": "solid", "color": "#f00"},
+            "devices": {"x": {"driver": "nope"}},
+        },
+    )
+    assert response.status_code == 422
+    _drain(queues)
+    assert player.calls == []
+
+
 def test_preview_validates_effects(client: TestClient) -> None:
     response = client.post(
         "/api/preview", json={"device": ["desk"], "effect": {"type": "flash", "color": "red"}}
@@ -182,6 +198,8 @@ def test_put_config_saves_and_keeps_comments(client: TestClient, config_path: Pa
         ({"devices": {"a": {"driver": "nope"}}}, "unknown driver"),
         ({"events": {"Stop": [{"device": "x", "effect": {"color": "#f00"}}]}}, "Stop"),
         ({"version": 2}, "version"),
+        ({"devices": ["a"]}, "devices"),
+        ({"devices": "a"}, "devices"),
     ],
 )
 def test_put_config_rejects_invalid(
@@ -268,3 +286,21 @@ def test_handle_event(config_path: Path, queues: DeviceQueues, player: Recorder)
     server.handle_event(config_path.with_name("missing.yaml"), queues, "Stop")
     _drain(queues)
     assert [device for device, _, _ in player.calls] == ["desk"]
+
+
+def test_discover_all_skips_broken_drivers(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    found = [DiscoveredDevice("nanoleaf", "Lines", "10.0.0.2", 16021, {})]
+    monkeypatch.setattr(NanoleafDriver, "discover", classmethod(lambda cls, timeout: found))
+    real_get_driver = drivers.get_driver
+
+    def get_driver(name: str) -> type[Driver]:
+        if name != "nanoleaf":
+            raise ImportError("Unable to load any of the following libraries: libhidapi")
+        return real_get_driver(name)
+
+    monkeypatch.setattr(server, "get_driver", get_driver)
+    response = client.post("/api/discover", json={})
+    assert response.status_code == 200
+    assert [d["name"] for d in response.json()] == ["Lines"]

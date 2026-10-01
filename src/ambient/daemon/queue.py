@@ -81,14 +81,19 @@ class DeviceQueues:
             return {k: replace(v) for k, v in self._status.items()}
 
     def close(self, timeout: float | None = None) -> None:
-        """Let queued effects finish (so every device gets restored), then stop the threads."""
+        """Let queued effects finish (so every device gets restored), then stop the threads.
+
+        ``timeout`` bounds the whole wait, not each device's, since ``ambient daemon stop`` has
+        a deadline.
+        """
         with self._lock:
             self._closed = True
             for q in self._queues.values():
                 q.put(None)
             threads = list(self._threads.values())
+        deadline = None if timeout is None else time.monotonic() + timeout
         for thread in threads:
-            thread.join(timeout)
+            thread.join(None if deadline is None else max(0.0, deadline - time.monotonic()))
 
     def _run(self, device_id: str) -> None:
         q = self._queues[device_id]

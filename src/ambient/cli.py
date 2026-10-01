@@ -289,8 +289,7 @@ def daemon_status() -> None:
     if info is None:
         typer.echo("daemon isn't running (hooks use direct mode)")
         raise typer.Exit(1)
-    socket = "ok" if info.socket_ok else "not responding"
-    typer.echo(f"daemon running (pid {info.pid}) at {info.url}, hook socket {socket}")
+    typer.echo(f"daemon running (pid {info.pid}) at {info.url}")
 
 
 @app.command()

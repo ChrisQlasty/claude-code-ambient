@@ -14,8 +14,11 @@ from ambient.daemon.listener import is_listening
 
 DEFAULT_PORT = 8765
 START_TIMEOUT = 10.0
-# Long enough for queued effects to finish and restore their devices on shutdown.
-STOP_TIMEOUT = 35.0
+# On shutdown the daemon gives in-flight requests (pairing can take minutes) this long...
+HTTP_GRACE = 5
+# ...then lets queued effects finish, so every device gets restored, for at most this long.
+DRAIN_TIMEOUT = 30.0
+STOP_TIMEOUT = HTTP_GRACE + DRAIN_TIMEOUT + 5.0
 _POLL = 0.1
 
 
@@ -27,7 +30,6 @@ class DaemonError(Exception):
 class DaemonInfo:
     pid: int
     url: str
-    socket_ok: bool
 
 
 def _pid_alive(pid: int) -> bool:
@@ -41,15 +43,20 @@ def _pid_alive(pid: int) -> bool:
 
 
 def running() -> DaemonInfo | None:
-    """The running daemon, from its state file, or ``None``."""
+    """The running daemon, from its state file, or ``None``.
+
+    A live pid alone proves nothing: a daemon that crashed or was killed leaves its state file
+    behind, and the OS may reuse its pid. The daemon opens its hook socket before writing the state
+    file and closes it first on shutdown, so a socket that answers means the daemon is up.
+    """
     try:
         state = json.loads(paths.daemon_state_file().read_text())
         pid, url = int(state["pid"]), str(state["url"])
     except (OSError, ValueError, KeyError, TypeError):
         return None
-    if not _pid_alive(pid):
+    if not _pid_alive(pid) or not is_listening(paths.daemon_socket()):
         return None
-    return DaemonInfo(pid, url, is_listening(paths.daemon_socket()))
+    return DaemonInfo(pid, url)
 
 
 def daemon_command(port: int) -> list[str]:
@@ -73,7 +80,7 @@ def start(
     deadline = clock() + timeout
     while clock() < deadline:
         info = running()
-        if info and info.socket_ok:
+        if info:
             return info
         sleep(_POLL)
     raise DaemonError(f"the daemon didn't start; see {paths.log_file()}")
@@ -104,7 +111,12 @@ def stop(
     info = running()
     if info is None:
         return False
-    os.kill(info.pid, signal.SIGTERM)
+    try:
+        os.kill(info.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return True
+    except PermissionError as exc:
+        raise DaemonError(f"not allowed to stop pid {info.pid}: {exc}") from exc
     deadline = clock() + timeout
     while clock() < deadline:
         if not _pid_alive(info.pid):

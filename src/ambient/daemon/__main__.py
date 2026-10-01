@@ -2,6 +2,7 @@
 
 import argparse
 import logging
+import os
 import sys
 
 from ambient.daemon.control import DEFAULT_PORT
@@ -22,5 +23,14 @@ def main(argv: list[str]) -> int:
     return 0
 
 
+def run(argv: list[str]) -> None:
+    code = main(argv)
+    # Request threads aren't daemon threads, so one still pairing (for up to minutes) would keep
+    # the process alive after uvicorn gave up on it. Devices are restored by now and config writes
+    # are atomic, so nothing is lost by not waiting for them.
+    logging.shutdown()
+    os._exit(code)
+
+
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    run(sys.argv[1:])

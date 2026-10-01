@@ -1,10 +1,12 @@
 """The daemon's device queues, unix socket listener, and `fire`'s socket-first dispatch."""
 
 import json
+import os
 import shutil
 import socket
 import tempfile
 import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -12,6 +14,7 @@ import pytest
 
 from ambient import fire, paths
 from ambient.config import DeviceConfig, parse_config
+from ambient.daemon import __main__ as daemon_main
 from ambient.daemon.listener import AlreadyRunningError, EventListener, is_listening
 from ambient.daemon.queue import DeviceQueues
 from ambient.effects import AnyEffect, Solid
@@ -86,6 +89,29 @@ def test_queue_survives_failures() -> None:
     queues.submit("a", CONSOLE, [RED])
     queues.close(timeout=5)
     assert queues.status()["a"].last_result == "failed"
+
+
+def test_queue_close_timeout_bounds_the_whole_wait() -> None:
+    player = Recorder()
+    player.release.clear()
+    queues = DeviceQueues(player)
+    for device in ("a", "b", "c"):
+        queues.submit(device, CONSOLE, [RED])
+    start = time.monotonic()
+    queues.close(timeout=0.3)
+    # Waiting the timeout per device would take 0.9 s.
+    assert time.monotonic() - start < 0.6
+    player.release.set()
+
+
+def test_daemon_entrypoint_exits_without_waiting_for_threads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exits: list[int] = []
+    monkeypatch.setattr(daemon_main, "main", lambda argv: 3)
+    monkeypatch.setattr(os, "_exit", exits.append)
+    daemon_main.run([])
+    assert exits == [3]
 
 
 def test_queue_rejects_work_after_close() -> None:

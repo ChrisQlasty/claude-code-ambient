@@ -2,6 +2,7 @@
 
 import json
 import os
+import signal
 import subprocess
 
 import pytest
@@ -30,13 +31,16 @@ def test_running_without_a_state_file() -> None:
     assert control.running() is None
 
 
-def test_running_reads_the_state_file() -> None:
+def test_running_reads_the_state_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(control, "is_listening", lambda path: path == paths.daemon_socket())
     _write_state(os.getpid())
-    info = control.running()
-    assert info is not None
-    assert info.pid == os.getpid()
-    assert info.url == "http://127.0.0.1:8765"
-    assert info.socket_ok is False  # nothing listens in tests
+    assert control.running() == control.DaemonInfo(os.getpid(), "http://127.0.0.1:8765")
+
+
+def test_running_ignores_a_live_pid_without_a_socket() -> None:
+    # A daemon that died hard leaves its state file, and its pid may now be another process.
+    _write_state(os.getpid())
+    assert control.running() is None
 
 
 def test_running_ignores_dead_or_garbled_state() -> None:
@@ -48,7 +52,7 @@ def test_running_ignores_dead_or_garbled_state() -> None:
 
 def test_start_spawns_and_waits(monkeypatch: pytest.MonkeyPatch) -> None:
     spawned: list[list[str]] = []
-    up = control.DaemonInfo(123, "http://127.0.0.1:9000", True)
+    up = control.DaemonInfo(123, "http://127.0.0.1:9000")
     answers: list[control.DaemonInfo | None] = [None, None, up]
     monkeypatch.setattr(control, "running", lambda: answers.pop(0))
     info = control.start(9000, spawn=spawned.append, sleep=lambda s: None)
@@ -58,7 +62,7 @@ def test_start_spawns_and_waits(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_start_returns_a_running_daemon(monkeypatch: pytest.MonkeyPatch) -> None:
-    up = control.DaemonInfo(1, "u", True)
+    up = control.DaemonInfo(1, "u")
     monkeypatch.setattr(control, "running", lambda: up)
     assert control.start(9000, spawn=lambda args: pytest.fail("spawned")) == up
 
@@ -78,8 +82,48 @@ def test_stop_when_not_running() -> None:
     assert control.stop() is False
 
 
+def test_stop_leaves_a_stale_pid_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_state(os.getpid())
+    signals: list[int] = []
+    monkeypatch.setattr(os, "kill", lambda pid, sig: signals.append(sig))
+    assert control.stop() is False
+    assert signal.SIGTERM not in signals
+
+
+def test_start_replaces_a_stale_state_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_state(os.getpid())
+    spawned: list[list[str]] = []
+
+    def spawn(args: list[str]) -> None:
+        spawned.append(args)
+        monkeypatch.setattr(control, "is_listening", lambda path: True)
+
+    info = control.start(9000, spawn=spawn, sleep=lambda s: None)
+    assert spawned == [control.daemon_command(9000)]
+    assert info.pid == os.getpid()
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"), [(ProcessLookupError, True), (PermissionError, control.DaemonError)]
+)
+def test_stop_handles_kill_errors(
+    monkeypatch: pytest.MonkeyPatch, error: type[OSError], expected: object
+) -> None:
+    monkeypatch.setattr(control, "running", lambda: control.DaemonInfo(4242, "u"))
+
+    def kill(pid: int, sig: int) -> None:
+        raise error
+
+    monkeypatch.setattr(os, "kill", kill)
+    if expected is True:
+        assert control.stop() is True
+    else:
+        with pytest.raises(control.DaemonError, match="not allowed"):
+            control.stop()
+
+
 def test_stop_signals_and_waits(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(control, "running", lambda: control.DaemonInfo(4242, "u", True))
+    monkeypatch.setattr(control, "running", lambda: control.DaemonInfo(4242, "u"))
     signals: list[tuple[int, int]] = []
     monkeypatch.setattr(os, "kill", lambda pid, sig: signals.append((pid, sig)))
     alive = [True, False]
@@ -95,12 +139,11 @@ def test_cli_status_not_running() -> None:
 
 
 def test_cli_status_running(monkeypatch: pytest.MonkeyPatch) -> None:
-    info = control.DaemonInfo(7, "http://127.0.0.1:8765", True)
+    info = control.DaemonInfo(7, "http://127.0.0.1:8765")
     monkeypatch.setattr(control, "running", lambda: info)
     result = runner.invoke(app, ["daemon", "status"])
     assert result.exit_code == 0
     assert "pid 7" in result.output
-    assert "hook socket ok" in result.output
 
 
 def test_cli_stop_not_running() -> None:
@@ -114,7 +157,7 @@ def test_cli_ui_starts_the_daemon(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def start(port: int) -> control.DaemonInfo:
         ports.append(port)
-        return control.DaemonInfo(7, f"http://127.0.0.1:{port}", True)
+        return control.DaemonInfo(7, f"http://127.0.0.1:{port}")
 
     monkeypatch.setattr(control, "start", start)
     result = runner.invoke(app, ["ui", "--port", "9001", "--no-open"])

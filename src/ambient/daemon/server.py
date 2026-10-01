@@ -32,7 +32,7 @@ from ambient.config import (
     load_raw,
     save_config,
 )
-from ambient.daemon.control import DEFAULT_PORT
+from ambient.daemon.control import DEFAULT_PORT, DRAIN_TIMEOUT, HTTP_GRACE
 from ambient.daemon.listener import EventListener
 from ambient.daemon.queue import DeviceQueues
 from ambient.drivers import UnknownDriverError, available_drivers, get_driver
@@ -181,11 +181,20 @@ def create_app(
 
     @app.post("/api/discover")
     def discover(request: DiscoverRequest) -> list[dict[str, Any]]:
-        names = [request.driver] if request.driver else available_drivers()
-        try:
-            found = [d for name in names for d in driver_cls(name).discover(request.timeout)]
-        except DriverError as exc:
-            raise HTTPException(502, str(exc)) from exc
+        if request.driver:
+            try:
+                found = driver_cls(request.driver).discover(request.timeout)
+            except DriverError as exc:
+                raise HTTPException(502, str(exc)) from exc
+        else:
+            found = []
+            for name in available_drivers():
+                # One broken driver (say, hidapi's native library is missing) mustn't hide the
+                # devices the others find.
+                try:
+                    found += get_driver(name).discover(request.timeout)
+                except Exception:
+                    logger.exception("discover: driver %s failed", name)
         return [
             {"driver": d.driver, "name": d.name, "host": d.host, "port": d.port, **d.details}
             for d in found
@@ -217,8 +226,10 @@ def create_app(
         unknown = [d for d in request.device if d not in known]
         if unknown:
             raise HTTPException(422, f"unknown device(s): {', '.join(unknown)}")
+        # Check every device before queuing any, so a bad request plays nothing.
         for name in request.device:
             driver_cls(known[name].driver)
+        for name in request.device:
             queues.submit(name, known[name], [request.effect])
         return {"queued": request.device}
 
@@ -239,9 +250,10 @@ def create_app(
     def put_config(request: ConfigRequest) -> dict[str, Any]:
         known = set(available_drivers())
         devices = request.config.get("devices") or {}
+        # A ``devices`` that isn't a mapping is left to save_config's validation to report.
         unknown = sorted(
             f"devices.{name}: unknown driver {device.get('driver')!r}"
-            for name, device in devices.items()
+            for name, device in (devices.items() if isinstance(devices, dict) else [])
             if isinstance(device, dict) and device.get("driver") not in known
         )
         if unknown:
@@ -302,13 +314,18 @@ def serve(
         _write_state({"pid": os.getpid(), "url": url})
         logger.info("daemon listening on %s and %s", url, listener.path)
         server = uvicorn.Server(
-            uvicorn.Config(create_app(queues, config_path), log_config=None, access_log=False)
+            uvicorn.Config(
+                create_app(queues, config_path),
+                log_config=None,
+                access_log=False,
+                timeout_graceful_shutdown=HTTP_GRACE,
+            )
         )
         server.run(sockets=[sock])
     finally:
         listener.close()
         # Queued effects still play, so devices end up restored.
-        queues.close(timeout=30)
+        queues.close(timeout=DRAIN_TIMEOUT)
         _clear_state()
         logger.info("daemon stopped")
 
