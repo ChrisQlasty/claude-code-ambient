@@ -227,6 +227,16 @@ def test_save_config_creates_a_missing_file(tmp_path: Path) -> None:
     assert load_raw(path) == {"devices": {"d": {"driver": "console"}}}
 
 
+@pytest.mark.parametrize("broken", ["devices: [unclosed\n", "- just\n- a list\n"])
+def test_save_config_replaces_a_broken_file(tmp_path: Path, broken: str) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(broken)
+    backup = save_config(path, {"devices": {"d": {"driver": "console"}}})
+    assert load_raw(path) == {"devices": {"d": {"driver": "console"}}}
+    assert backup is not None
+    assert backup.read_text() == broken
+
+
 def test_save_config_does_not_confuse_bools_and_ints(tmp_path: Path) -> None:
     path = tmp_path / "config.yaml"
     path.write_text("devices:\n  d: {driver: console, flag: 1}\n")

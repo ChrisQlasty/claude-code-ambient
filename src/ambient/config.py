@@ -10,6 +10,7 @@ from typing import Annotated, Any, Literal
 import yaml
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 from ruamel.yaml import YAML
+from ruamel.yaml.error import YAMLError
 
 from ambient.effects import Brightness, Color, Effect
 
@@ -127,14 +128,20 @@ def save_config(path: Path, new: dict[str, Any]) -> Path | None:
         Config.model_validate(new)
     except ValueError as exc:
         raise ConfigError(str(exc)) from exc
-    rt, data = _load_round_trip(path)
+    try:
+        rt, data = _load_round_trip(path)
+    except (ConfigError, YAMLError):
+        # ``new`` replaces everything, so a broken file needn't block the save that fixes it. It
+        # can't be merged into, so its comments are lost, but ``_write`` keeps it as the backup.
+        rt, data = _load_round_trip(None)
     return _write(path, rt, _merge(data, new))
 
 
-def _load_round_trip(path: Path) -> tuple[YAML, Any]:
+def _load_round_trip(path: Path | None) -> tuple[YAML, Any]:
+    """Load ``path`` for editing in place; ``None`` (or a missing file) starts a fresh document."""
     rt = YAML()
     rt.preserve_quotes = True
-    text = path.read_text() if path.exists() else ""
+    text = path.read_text() if path and path.exists() else ""
     data = rt.load(text) if text.strip() else None
     if data is None:
         data = rt.load("version: 1\ndevices: {}\n")
