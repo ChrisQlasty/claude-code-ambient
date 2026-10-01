@@ -1,4 +1,4 @@
-"""``python -m ambient.daemon``: what ``ambient daemon start`` spawns in the background."""
+"""``python -m ambient.daemon``: what ``ambient ui`` spawns in the background."""
 
 import argparse
 import logging

@@ -1,11 +1,8 @@
-"""Starting, stopping and inspecting the daemon, its login item, and their CLI commands."""
+"""Starting, stopping and inspecting the daemon, and its CLI commands."""
 
 import json
 import os
-import plistlib
 import subprocess
-from collections.abc import Sequence
-from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -91,41 +88,6 @@ def test_stop_signals_and_waits(monkeypatch: pytest.MonkeyPatch) -> None:
     assert signals[0][0] == 4242
 
 
-def test_login_item_plist() -> None:
-    plist = plistlib.loads(control.launch_agent_plist(Path("/opt/bin/ambient"), 9000))
-    assert plist["ProgramArguments"] == ["/opt/bin/ambient", "daemon", "run", "--port", "9000"]
-    assert plist["RunAtLoad"] is True
-    assert "KeepAlive" not in plist
-
-
-class FakeLaunchctl:
-    def __init__(self, returncode: int = 0) -> None:
-        self.calls: list[list[str]] = []
-        self.returncode = returncode
-
-    def __call__(self, args: Sequence[str]) -> subprocess.CompletedProcess[str]:
-        self.calls.append(list(args))
-        return subprocess.CompletedProcess(args, self.returncode, "", "nope")
-
-
-def test_install_and_uninstall_login_item(tmp_path: Path) -> None:
-    path = tmp_path / "LaunchAgents" / "x.plist"
-    launchctl = FakeLaunchctl()
-    assert control.install_login_item(Path("/a"), 9000, path=path, runner=launchctl) == path
-    assert path.exists()
-    assert [c[1] for c in launchctl.calls] == ["bootout", "bootstrap"]
-    assert control.uninstall_login_item(path=path, runner=launchctl) is True
-    assert not path.exists()
-    assert control.uninstall_login_item(path=path, runner=launchctl) is False
-
-
-def test_install_login_item_reports_launchctl_errors(tmp_path: Path) -> None:
-    with pytest.raises(control.DaemonError, match="bootstrap failed"):
-        control.install_login_item(
-            Path("/a"), 9000, path=tmp_path / "x.plist", runner=FakeLaunchctl(1)
-        )
-
-
 def test_cli_status_not_running() -> None:
     result = runner.invoke(app, ["daemon", "status"])
     assert result.exit_code == 1
@@ -161,11 +123,11 @@ def test_cli_ui_starts_the_daemon(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "http://127.0.0.1:9001" in result.output
 
 
-def test_cli_start_reports_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_ui_reports_a_failed_start(monkeypatch: pytest.MonkeyPatch) -> None:
     def start(port: int) -> control.DaemonInfo:
         raise control.DaemonError("the daemon didn't start")
 
     monkeypatch.setattr(control, "start", start)
-    result = runner.invoke(app, ["daemon", "start"])
+    result = runner.invoke(app, ["ui", "--no-open"])
     assert result.exit_code == 1
     assert "didn't start" in result.output

@@ -19,7 +19,9 @@ from ambient.events import HookEvent
 app = typer.Typer(no_args_is_help=True, help="Ambient light effects for Claude Code events.")
 config_app = typer.Typer(no_args_is_help=True, help="Inspect and validate the config file.")
 app.add_typer(config_app, name="config")
-daemon_app = typer.Typer(no_args_is_help=True, help="Run the background daemon (web UI + hooks).")
+daemon_app = typer.Typer(
+    no_args_is_help=True, help="Inspect or stop the daemon that `ambient ui` starts."
+)
 app.add_typer(daemon_app, name="daemon")
 
 ConfigOption = Annotated[
@@ -270,13 +272,6 @@ def daemon_run(port: PortOption = control.DEFAULT_PORT) -> None:
         raise _fail(str(exc)) from exc
 
 
-@daemon_app.command("start")
-def daemon_start(port: PortOption = control.DEFAULT_PORT) -> None:
-    """Start the daemon in the background."""
-    info = _start_daemon(port)
-    typer.secho(f"daemon running (pid {info.pid}) at {info.url}", fg=typer.colors.GREEN)
-
-
 @daemon_app.command("stop")
 def daemon_stop() -> None:
     """Stop the daemon. Hooks fall back to direct mode."""
@@ -298,44 +293,21 @@ def daemon_status() -> None:
     typer.echo(f"daemon running (pid {info.pid}) at {info.url}, hook socket {socket}")
 
 
-@daemon_app.command("install-login-item")
-def daemon_install_login_item(port: PortOption = control.DEFAULT_PORT) -> None:
-    """Start the daemon now and at every login (macOS LaunchAgent)."""
-    if control.running():
-        control.stop()
-    try:
-        path = control.install_login_item(hooks_install.ambient_executable(), port)
-    except (control.DaemonError, hooks_install.HooksError) as exc:
-        raise _fail(str(exc)) from exc
-    typer.secho(f"installed {path}", fg=typer.colors.GREEN)
-
-
-@daemon_app.command("uninstall-login-item")
-def daemon_uninstall_login_item() -> None:
-    """Remove the LaunchAgent and stop the daemon it started."""
-    removed = control.uninstall_login_item()
-    typer.echo(f"removed {control.launch_agent_path()}" if removed else "no login item installed")
-
-
 @app.command()
 def ui(
     port: PortOption = control.DEFAULT_PORT,
     open_browser: Annotated[bool, typer.Option("--open/--no-open")] = True,
 ) -> None:
-    """Open the web UI, starting the daemon if needed."""
+    """Open the web UI, starting the daemon in the background if needed."""
     import webbrowser
 
-    info = _start_daemon(port)
-    typer.echo(info.url)
-    if open_browser:
-        webbrowser.open(info.url)
-
-
-def _start_daemon(port: int) -> control.DaemonInfo:
     try:
-        return control.start(port)
+        info = control.start(port)
     except control.DaemonError as exc:
         raise _fail(str(exc)) from exc
+    typer.echo(f"daemon running (pid {info.pid}) at {info.url}")
+    if open_browser:
+        webbrowser.open(info.url)
 
 
 def _format_errors(exc: ValidationError) -> str:

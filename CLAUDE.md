@@ -33,7 +33,7 @@ All four checks (pytest, ruff check, ruff format, mypy) must pass before any com
   and one module per device. Drivers are registered through the `ambient.drivers` entry point group in `pyproject.toml`.
 - `src/ambient/daemon/`: optional daemon. `server.py` (FastAPI REST API on loopback, static UI, `serve()`),
   `listener.py` (unix socket for `fire`), `queue.py` (per-device effect queues over `engine.play_on_device`),
-  `control.py` (start/stop/status, launchd login item).
+  `control.py` (start/stop/status).
 - `src/ambient/pairing.py`: pairing shared by `ambient pair` and the API.
 - `web/`: Svelte + TS + Vite UI. `npm run build` writes `src/ambient/web_dist/`, which is committed; rebuild and
   commit it with any `web/` change.

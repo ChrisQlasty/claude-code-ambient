@@ -121,13 +121,13 @@ been restored, so an interrupted effect is still undone by the next one.
 ## Daemon and web UI
 
 ```sh
-uv run ambient ui                        # start the daemon if needed and open the web UI
-uv run ambient daemon start|stop|status  # run it in the background; `daemon run` for the foreground
-uv run ambient daemon install-login-item # macOS: start it at every login (LaunchAgent)
-uv run ambient daemon uninstall-login-item
+uv run ambient ui              # start the daemon in the background if needed, open the web UI
+uv run ambient daemon status   # is it running, and on which URL?
+uv run ambient daemon stop     # stop it; hooks go back to direct mode
+uv run ambient daemon run      # run it in the foreground instead, e.g. to watch it while debugging
 ```
 
-The daemon is optional. While it runs, `ambient fire` hands events to it over a unix socket
+The daemon is optional and mainly hosts the web UI. While it runs, `ambient fire` hands events to it over a unix socket
 (`~/.config/ambient/ambientd.sock`) instead of starting a worker; when it's stopped, hooks fall back to the worker as
 above, so nothing has to be reinstalled. It still opens each device per effect and takes the same per-device locks, so it
 never conflicts with `ambient test` or a worker.
@@ -163,7 +163,7 @@ changing the UI needs Node:
 
 ```sh
 cd web && npm ci
-npm run dev     # hot reload on :5173, proxying /api to a daemon on :8765 (`ambient daemon start`)
+npm run dev     # hot reload on :5173, proxying /api to a daemon on :8765 (`ambient ui --no-open`)
 npm run check   # type-check
 npm run build   # rebuild src/ambient/web_dist/; commit the result
 ```
