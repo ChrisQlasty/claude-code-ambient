@@ -48,3 +48,8 @@ def log_file() -> Path:
 
 def daemon_socket() -> Path:
     return config_dir() / "ambientd.sock"
+
+
+def daemon_state_file() -> Path:
+    """Where a running daemon records its pid and web UI address."""
+    return state_dir() / "daemon.json"

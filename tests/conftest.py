@@ -7,7 +7,9 @@ from ambient.drivers import logitech_g102, nuphy_air75_v3
 
 @pytest.fixture(autouse=True)
 def isolated_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Locks, baselines, logs and Claude's settings.json must never touch the real home dir.
+    # The config, daemon socket, locks, baselines, logs and Claude's settings.json must never
+    # touch the real home dir.
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))

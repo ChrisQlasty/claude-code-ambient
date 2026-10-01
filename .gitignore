@@ -18,9 +18,8 @@ dist/
 .coverage
 htmlcov/
 
-# Frontend (Phase 5)
+# Frontend: the build in src/ambient/web_dist/ is committed so users never need Node
 node_modules/
-src/ambient/web_dist/
 
 # OS / editors
 .DS_Store

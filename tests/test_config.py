@@ -2,7 +2,15 @@ from pathlib import Path
 
 import pytest
 
-from ambient.config import ConfigError, json_schema, load_config, parse_config, update_device
+from ambient.config import (
+    ConfigError,
+    json_schema,
+    load_config,
+    load_raw,
+    parse_config,
+    save_config,
+    update_device,
+)
 from ambient.effects import RGB, Flash, Pulse
 
 EXAMPLE = Path(__file__).parent.parent / "examples" / "config.yaml"
@@ -152,3 +160,97 @@ def test_update_device_refuses_invalid_result(tmp_path: Path) -> None:
         update_device(path, "lines", {"baseline": {"color": "nope"}})
     assert path.read_text() == "version: 1\n"
     assert not (tmp_path / "config.yaml.bak").exists()
+
+
+COMMENTED = """\
+version: 1
+# my devices
+devices:
+  desk:  # the lamp
+    driver: console
+    baseline: {color: '#FFF', brightness: 60}
+  old: {driver: console}
+events:
+  Stop:
+    - device: desk  # green
+      effect: {type: flash, color: '#00ff60', times: 3}
+"""
+
+
+def test_save_config_keeps_comments_and_quoting(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(COMMENTED)
+    new = {
+        "version": 1,
+        "devices": {"desk": {"driver": "console", "baseline": {"color": "#FFF", "brightness": 80}}},
+        "events": {
+            "Stop": [{"device": "desk", "effect": {"type": "pulse", "color": "#00ff60"}}],
+            "UserPromptSubmit": [
+                {"device": ["desk"], "effect": {"type": "solid", "color": "#00f"}}
+            ],
+        },
+    }
+
+    backup = save_config(path, new)
+
+    text = path.read_text()
+    assert backup is not None
+    assert backup.read_text() == COMMENTED
+    assert "# my devices" in text
+    assert "# the lamp" in text
+    assert "# green" in text
+    assert "'#FFF'" in text  # unchanged scalars keep their quoting
+    assert "old" not in text
+    assert "times" not in text
+    assert load_raw(path) == new
+
+
+def test_save_config_validates_before_writing(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(COMMENTED)
+    with pytest.raises(ConfigError, match="unknown device"):
+        save_config(
+            path,
+            {
+                "events": {
+                    "Stop": [{"device": "nope", "effect": {"type": "solid", "color": "#fff"}}]
+                }
+            },
+        )
+    assert path.read_text() == COMMENTED
+    assert not (tmp_path / "config.yaml.bak").exists()
+
+
+def test_save_config_creates_a_missing_file(tmp_path: Path) -> None:
+    path = tmp_path / "new" / "config.yaml"
+    assert save_config(path, {"devices": {"d": {"driver": "console"}}}) is None
+    assert load_raw(path) == {"devices": {"d": {"driver": "console"}}}
+
+
+@pytest.mark.parametrize("broken", ["devices: [unclosed\n", "- just\n- a list\n"])
+def test_save_config_replaces_a_broken_file(tmp_path: Path, broken: str) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(broken)
+    backup = save_config(path, {"devices": {"d": {"driver": "console"}}})
+    assert load_raw(path) == {"devices": {"d": {"driver": "console"}}}
+    assert backup is not None
+    assert backup.read_text() == broken
+
+
+def test_save_config_does_not_confuse_bools_and_ints(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text("devices:\n  d: {driver: console, flag: 1}\n")
+    save_config(path, {"devices": {"d": {"driver": "console", "flag": True}}})
+    assert load_raw(path)["devices"]["d"]["flag"] is True
+
+
+def test_load_raw_keeps_the_file_as_written(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(COMMENTED)
+    raw = load_raw(path)
+    assert raw["events"]["Stop"][0]["device"] == "desk"
+    assert "brightness" not in raw["events"]["Stop"][0]["effect"]
+    assert load_raw(tmp_path / "missing.yaml") == {}
+    path.write_text("devices: [1]")
+    with pytest.raises(ConfigError):
+        load_raw(path)

@@ -1,6 +1,7 @@
 """File logging. Hooks must stay silent, so errors from `fire` and the worker go here."""
 
 import logging
+from collections import deque
 from logging.handlers import RotatingFileHandler
 
 from ambient import paths
@@ -26,3 +27,12 @@ def setup(level: int = logging.INFO) -> logging.Logger:
     logger.addHandler(handler)
     logger.setLevel(level)
     return logger
+
+
+def tail(lines: int) -> str:
+    """The last ``lines`` lines of the log file ("" if there is none)."""
+    try:
+        with paths.log_file().open(encoding="utf-8", errors="replace") as handle:
+            return "".join(deque(handle, maxlen=lines))
+    except FileNotFoundError:
+        return ""

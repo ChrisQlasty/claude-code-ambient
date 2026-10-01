@@ -78,6 +78,21 @@ def plan_install(path: Path, command: str) -> Change:
     return Change(path, before, _dump(settings) if modified else before)
 
 
+def installed_events(path: Path) -> list[str]:
+    """Handled events that have an ``ambient fire`` hook in ``path``. Read-only."""
+    _, settings = _read(path)
+    hooks = _hooks_section(settings) or {}
+    return [
+        event
+        for event in HANDLED_EVENTS
+        if isinstance(groups := hooks.get(event), list)
+        and any(
+            is_ambient_command(h.get("command"))
+            for h in _entries([g for g in groups if isinstance(g, dict)])
+        )
+    ]
+
+
 def plan_uninstall(path: Path) -> Change:
     before, settings = _read(path)
     hooks = _hooks_section(settings)

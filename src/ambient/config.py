@@ -10,6 +10,7 @@ from typing import Annotated, Any, Literal
 import yaml
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 from ruamel.yaml import YAML
+from ruamel.yaml.error import YAMLError
 
 from ambient.effects import Brightness, Color, Effect
 
@@ -81,6 +82,14 @@ def parse_config(text: str) -> Config:
         raise ConfigError(str(exc)) from exc
 
 
+def load_raw(path: Path) -> dict[str, Any]:
+    """The config file as plain data, as written (no defaults filled in), after validating it."""
+    text = path.read_text() if path.exists() else ""
+    parse_config(text)
+    data = yaml.safe_load(text)
+    return data if isinstance(data, dict) else {}
+
+
 def load_config(path: Path) -> Config:
     try:
         text = path.read_text()
@@ -100,20 +109,70 @@ def update_device(path: Path, name: str, fields: dict[str, Any]) -> Path | None:
     the previous file is copied to ``<name>.bak`` first, and the write is atomic. Returns the
     backup path, or ``None`` when the file didn't exist.
     """
-    rt = YAML()
-    rt.preserve_quotes = True
-    text = path.read_text() if path.exists() else ""
-    data = rt.load(text) if text.strip() else None
-    if data is None:
-        data = rt.load("version: 1\ndevices: {}\n")
-    if not isinstance(data, dict):
-        raise ConfigError(f"{path}: expected a mapping at the top level")
+    rt, data = _load_round_trip(path)
     if data.get("devices") is None:
         data["devices"] = {}
     if data["devices"].get(name) is None:
         data["devices"][name] = {}
     data["devices"][name].update(fields)
+    return _write(path, rt, data)
 
+
+def save_config(path: Path, new: dict[str, Any]) -> Path | None:
+    """Replace the config file's contents with ``new``, keeping comments where keys survive.
+
+    ``new`` is merged into the existing YAML document key by key, so unchanged values keep their
+    comments and quoting. Validated, backed up and written like :func:`update_device`.
+    """
+    try:
+        Config.model_validate(new)
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+    try:
+        rt, data = _load_round_trip(path)
+    except (ConfigError, YAMLError):
+        # ``new`` replaces everything, so a broken file needn't block the save that fixes it. It
+        # can't be merged into, so its comments are lost, but ``_write`` keeps it as the backup.
+        rt, data = _load_round_trip(None)
+    return _write(path, rt, _merge(data, new))
+
+
+def _load_round_trip(path: Path | None) -> tuple[YAML, Any]:
+    """Load ``path`` for editing in place; ``None`` (or a missing file) starts a fresh document."""
+    rt = YAML()
+    rt.preserve_quotes = True
+    text = path.read_text() if path and path.exists() else ""
+    data = rt.load(text) if text.strip() else None
+    if data is None:
+        data = rt.load("version: 1\ndevices: {}\n")
+    if not isinstance(data, dict):
+        raise ConfigError(f"{path}: expected a mapping at the top level")
+    return rt, data
+
+
+def _merge(old: Any, new: Any) -> Any:
+    """``new``, reusing ``old``'s round-trip nodes (and so their comments) wherever possible."""
+    if isinstance(old, dict) and isinstance(new, dict):
+        for key in [k for k in old if k not in new]:
+            del old[key]
+        for key, value in new.items():
+            old[key] = _merge(old[key], value) if key in old else value
+        return old
+    if isinstance(old, list) and isinstance(new, list):
+        del old[len(new) :]
+        for i, value in enumerate(new):
+            if i < len(old):
+                old[i] = _merge(old[i], value)
+            else:
+                old.append(value)
+        return old
+    # Keeping an equal scalar keeps its quoting; `True == 1` mustn't count as equal.
+    if old == new and isinstance(old, bool) == isinstance(new, bool):
+        return old
+    return new
+
+
+def _write(path: Path, rt: YAML, data: Any) -> Path | None:
     buffer = io.StringIO()
     rt.dump(data, buffer)
     new_text = buffer.getvalue()
